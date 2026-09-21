@@ -1633,6 +1633,34 @@ tests/fm-backend-cmux-smoke.test.sh
 
 The real smoke proves socket access, fresh readiness, current-path probing, send and keys, bounded capture, title identity, and guarded exact cleanup.
 
+### Post-creation workspace snapshot
+
+`workspace list` is not read-your-writes against `new-workspace`, verified on 2026-09-21 with cmux 0.64.25 build 106 on macOS aarch64.
+A list issued immediately after a successful create can be served a snapshot taken before the new workspace was published, returning no match for a workspace that certainly exists and resolving correctly on a re-read a moment later.
+The exposure appeared only when a list call preceded the create in the same sequence, which is the adapter's own duplicate-check-then-create shape, so a bare create-then-read probe never reproduced it.
+
+```text
+query  -> EMPTY
+create -> OK
+query  -> EMPTY
+sleep 1; query -> 7E517926-4039-48D3-BAA5-7EFF5B2ECE73
+```
+
+`fm_backend_cmux_create_task` therefore gives both post-creation reads a bounded retry window and keeps its refusal once that bound is spent.
+The live guard observed the stale read in 1 to 2 of 5 rounds on this build while every `fm_backend_cmux_create_task` call resolved its workspace and surface.
+The dated proof and the command that refreshes this entry:
+
+```sh
+bin/fm-test-run.sh tests/fm-cmux-workspace-settle-live-e2e.test.sh
+```
+
+```text
+ok - real cmux (cmux 0.64.25 (106) [b685a275c]): create_task resolved its new workspace and surface on all 5 rounds
+ok - real cmux (cmux 0.64.25 (106) [b685a275c]): the un-retried post-create read was stale in 1 of 5 rounds, so the settle was actually exercised
+```
+
+The portable regression is `tests/fm-backend-cmux.test.sh`.
+
 ### Claude composer confirmation
 
 The borderless Claude composer confirmation was verified on 2026-08-09 with cmux 0.64.22 build 102 and Claude Code 2.1.226 on macOS aarch64.

@@ -496,6 +496,94 @@ test_create_task_creates_and_parses_ids() {
   pass "fm_backend_cmux_create_task: creates a workspace and parses workspace_id/surface_id from list responses"
 }
 
+# cmux_log_count: how many logged fake-CLI invocations start with <subcommand>
+# (its first two argv words, unit-separated).
+cmux_log_count() {  # <logfile> <word1> [word2]
+  local log=$1 pattern
+  pattern=$'\x1f'"$2"
+  [ $# -lt 3 ] || pattern="$pattern"$'\x1f'"$3"
+  grep -c -- "$pattern" "$log" 2>/dev/null || true
+}
+
+test_create_task_retries_stale_post_create_workspace_list() {
+  local dir fb out title log
+  dir="$TMP_ROOT/create-task-stale-list"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-stalelist)
+  # 1: workspace list (pre-create duplicate check) -> no match
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  # 2: new-workspace (silent on success)
+  # 3: workspace list (post-create) -> STALE snapshot, missing the new workspace
+  printf '{"workspaces":[]}' > "$dir/responses/3.out"
+  # 4: workspace list (post-create retry) -> the workspace is now published
+  cmux_workspace_list_response "$dir" 4 "dddddddd-3333-3333-3333-333333333333" "$title"
+  # 5: list-panes -> default surface id
+  cmux_panes_response "$dir" 5 "eeeeeeee-4444-4444-4444-444444444444"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    FM_BACKEND_CMUX_SETTLE_TRIES=5 FM_BACKEND_CMUX_SETTLE_DELAY=0 \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-stalelist /tmp/proj' "$ROOT" )
+  [ "$out" = "dddddddd-3333-3333-3333-333333333333 eeeeeeee-4444-4444-4444-444444444444" ] \
+    || fail "create_task should retry a stale post-create workspace list, got '$out'"
+  log=$(cmux_log_count "$dir/log" workspace list)
+  [ "$log" -eq 3 ] || fail "create_task should have re-read workspace list once after the stale snapshot (saw $log list calls)"
+  [ "$(cmux_log_count "$dir/log" new-workspace)" -eq 1 ] \
+    || fail "create_task must not create a second workspace while settling the first"
+  pass "fm_backend_cmux_create_task: re-reads a stale post-create workspace list instead of aborting the spawn"
+}
+
+test_create_task_retries_stale_post_create_surface() {
+  local dir fb out title
+  dir="$TMP_ROOT/create-task-stale-panes"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-stalepanes)
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  cmux_workspace_list_response "$dir" 3 "ffffffff-5555-5555-5555-555555555555" "$title"
+  # 4: list-panes -> STALE, the fresh workspace has no surface yet
+  cmux_panes_empty_response "$dir" 4
+  # 5: list-panes retry -> the default surface is now visible
+  cmux_panes_response "$dir" 5 "99999999-6666-6666-6666-666666666666"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    FM_BACKEND_CMUX_SETTLE_TRIES=5 FM_BACKEND_CMUX_SETTLE_DELAY=0 \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-stalepanes /tmp/proj' "$ROOT" )
+  [ "$out" = "ffffffff-5555-5555-5555-555555555555 99999999-6666-6666-6666-666666666666" ] \
+    || fail "create_task should retry a stale post-create list-panes read, got '$out'"
+  [ "$(cmux_log_count "$dir/log" list-panes)" -eq 2 ] \
+    || fail "create_task should have re-read list-panes once after the empty snapshot"
+  pass "fm_backend_cmux_create_task: re-reads a stale post-create surface list instead of aborting the spawn"
+}
+
+test_create_task_refuses_when_settle_bound_is_spent() {
+  local dir fb out status n
+  dir="$TMP_ROOT/create-task-bound"; mkdir -p "$dir/responses"
+  # Every workspace list, before and after the create, reports nothing.
+  for n in 1 3 4 5 6 7 8 9 10; do printf '{"workspaces":[]}' > "$dir/responses/$n.out"; done
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    FM_BACKEND_CMUX_SETTLE_TRIES=3 FM_BACKEND_CMUX_SETTLE_DELAY=0 \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-noresolve /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task must still refuse when the workspace id never resolves within the bound"
+  assert_contains "$out" "could not resolve a cmux workspace id" \
+    "create_task did not keep its loud refusal after the settle bound was spent"
+  # One duplicate check plus exactly the bounded number of post-create reads.
+  [ "$(cmux_log_count "$dir/log" workspace list)" -eq 4 ] \
+    || fail "create_task's post-create retry is not bounded at FM_BACKEND_CMUX_SETTLE_TRIES"
+  pass "fm_backend_cmux_create_task: keeps its loud refusal and stops at the configured retry bound"
+}
+
+test_settle_returns_first_non_empty_result_without_extra_calls() {
+  local dir out
+  dir="$TMP_ROOT/settle-immediate"; mkdir -p "$dir"
+  out=$( FM_SETTLE_MARK="$dir/calls" FM_BACKEND_CMUX_SETTLE_TRIES=5 FM_BACKEND_CMUX_SETTLE_DELAY=0 \
+    bash -c '. "$0/bin/backends/cmux.sh"
+      probe() { echo probed >> "$FM_SETTLE_MARK"; printf "resolved-id"; }
+      fm_backend_cmux_settle probe' "$ROOT" )
+  [ "$out" = "resolved-id" ] || fail "settle should echo the resolver's first non-empty result, got '$out'"
+  [ "$(wc -l < "$dir/calls" | tr -d ' ')" = "1" ] \
+    || fail "settle should not re-run a resolver that already answered"
+  pass "fm_backend_cmux_settle: returns the first non-empty result without a further attempt"
+}
+
 # --- target_ready / capture ---------------------------------------------------
 
 test_target_ready_fails_when_target_absent() {
@@ -1130,6 +1218,10 @@ test_ensure_running_fails_fast_on_denied_without_launching
 test_ensure_running_fails_fast_on_unauth_without_launching
 test_create_task_refuses_duplicate_label
 test_create_task_creates_and_parses_ids
+test_create_task_retries_stale_post_create_workspace_list
+test_create_task_retries_stale_post_create_surface
+test_create_task_refuses_when_settle_bound_is_spent
+test_settle_returns_first_non_empty_result_without_extra_calls
 test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch

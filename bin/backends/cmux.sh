@@ -82,6 +82,16 @@
 #      created successfully sharing one title). The duplicate check below is
 #      ours, mirroring every other adapter, and uses home-scoped titles so a
 #      shared cmux app cannot cross-match another firstmate home's task.
+#   7. `workspace list` is NOT read-your-writes against `new-workspace`: a
+#      list issued immediately after a successful create can be served a
+#      snapshot taken before the new workspace was published, returning an
+#      EMPTY match for a workspace that certainly exists, and resolving
+#      correctly on a re-read a moment later. Observed only when a list call
+#      precedes the create in the same sequence, which is exactly the adapter's
+#      own duplicate-check-then-create shape, so it never reproduced in a bare
+#      create-then-read probe. fm_backend_cmux_settle gives both post-creation
+#      reads a bounded retry window; the duplicate check itself must stay,
+#      since finding #6 leaves title uniqueness entirely to this adapter.
 #
 #   Unanticipated finding, load-bearing for this adapter: the control socket
 #   defaults to `socketControlMode=cmuxOnly`, which REJECTS any CLI process
@@ -341,11 +351,49 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
     | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
 }
 
+# Bounded post-creation settle window for the two reads that run immediately
+# after `new-workspace`. Verified live (cmux 0.64.25, macOS aarch64,
+# 2026-09-21, docs/verification/runtime-backends.md): a `workspace list` issued
+# straight after a successful `new-workspace` can be served a snapshot taken
+# before the new workspace was published, returning EMPTY for a workspace that
+# certainly exists, and resolving correctly on a re-read a moment later.
+# Overridable only so tests can drive the loop deterministically.
+FM_BACKEND_CMUX_SETTLE_TRIES="${FM_BACKEND_CMUX_SETTLE_TRIES:-40}"
+FM_BACKEND_CMUX_SETTLE_DELAY="${FM_BACKEND_CMUX_SETTLE_DELAY:-0.25}"
+
+# fm_backend_cmux_settle: run <resolver...> until it echoes something
+# non-empty, at most FM_BACKEND_CMUX_SETTLE_TRIES times with
+# FM_BACKEND_CMUX_SETTLE_DELAY between attempts. Echoes the first non-empty
+# result and returns 0; returns 1 with no output once the bound is spent, so
+# a genuinely unresolvable id stays the caller's loud refusal rather than
+# becoming a silent success or an unbounded wait.
+fm_backend_cmux_settle() {  # <resolver-command...>
+  local tries=${FM_BACKEND_CMUX_SETTLE_TRIES:-40} delay=${FM_BACKEND_CMUX_SETTLE_DELAY:-0.25}
+  local attempt=1 out
+  case "$tries" in
+    ''|*[!0-9]*) tries=1 ;;
+  esac
+  [ "$tries" -ge 1 ] || tries=1
+  while :; do
+    out=$("$@")
+    if [ -n "$out" ]; then
+      printf '%s' "$out"
+      return 0
+    fi
+    [ "$attempt" -lt "$tries" ] || return 1
+    attempt=$((attempt + 1))
+    sleep "$delay"
+  done
+}
+
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
 # refusing an existing live <label> (finding #6: cmux enforces no uniqueness
-# itself). Resolves the fresh workspace's default surface via one list-panes
-# call (finding: a freshly created workspace already has exactly one surface,
-# so no separate new-surface call is needed). --focus false is passed for
+# itself). Both post-creation reads go through fm_backend_cmux_settle, because
+# cmux can serve either of them a snapshot predating the workspace it was just
+# told to create; the bound is explicit and an exhausted bound is still the
+# loud refusal below. Resolves the fresh workspace's default surface via one
+# list-panes call (finding: a freshly created workspace already has exactly
+# one surface, so no separate new-surface call is needed). --focus false is passed for
 # defense in depth though verified to already be the default (finding:
 # workspace/surface/pane create all default focus to false) - no
 # focus-restore dance is needed, unlike zellij. Echoes "<workspace_id>
@@ -362,10 +410,10 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     echo "error: cmux new-workspace failed for '$title': $out" >&2
     return 1
   }
-  wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
-  [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation" >&2; return 1; }
-  sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
-  [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
+  wsid=$(fm_backend_cmux_settle fm_backend_cmux_workspace_id_for_label "$title")
+  [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation (retried ${FM_BACKEND_CMUX_SETTLE_TRIES:-40} times)" >&2; return 1; }
+  sfid=$(fm_backend_cmux_settle fm_backend_cmux_surface_id_for_workspace "$wsid")
+  [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid) (retried ${FM_BACKEND_CMUX_SETTLE_TRIES:-40} times)" >&2; return 1; }
   printf '%s %s' "$wsid" "$sfid"
 }
 
