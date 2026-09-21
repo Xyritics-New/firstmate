@@ -45,9 +45,11 @@ fm_backend_source cmux || gate_gap "could not source the cmux adapter"
 
 # The cmux CLI ships inside the app bundle and only lands on PATH when the
 # operator ran cmux's optional "install CLI" action, so make the bundle copy
-# visible before the gate decides whether this host can run the guard.
-if ! command -v cmux >/dev/null 2>&1 && [ -x "$FM_BACKEND_CMUX_BUNDLE_BIN" ]; then
-  PATH="$(dirname "$FM_BACKEND_CMUX_BUNDLE_BIN"):$PATH"
+# visible before the gate decides whether this host can run the guard. The
+# bundle path is the adapter's to own, so ask fm_backend_cmux_bin for it
+# rather than re-reading its variable.
+if ! command -v cmux >/dev/null 2>&1 && CMUX_BUNDLE_BIN=$(fm_backend_cmux_bin); then
+  PATH="$(dirname "$CMUX_BUNDLE_BIN"):$PATH"
   export PATH
 fi
 
