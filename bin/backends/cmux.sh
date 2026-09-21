@@ -361,23 +361,33 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
 # straight after a successful `new-workspace` can be served a snapshot taken
 # before the new workspace was published, returning EMPTY for a workspace that
 # certainly exists, and resolving correctly on a re-read a moment later.
-# Overridable only so tests can drive the loop deterministically.
-FM_BACKEND_CMUX_SETTLE_TRIES="${FM_BACKEND_CMUX_SETTLE_TRIES:-40}"
-FM_BACKEND_CMUX_SETTLE_DELAY="${FM_BACKEND_CMUX_SETTLE_DELAY:-0.25}"
+# FM_BACKEND_CMUX_SETTLE_TRIES (default 40) and FM_BACKEND_CMUX_SETTLE_DELAY
+# (default 0.25s) are overridable only so tests can drive the loop
+# deterministically.
+
+# fm_backend_cmux_settle_tries: the attempt bound the settle loop actually
+# spends - FM_BACKEND_CMUX_SETTLE_TRIES when it reads as a positive integer,
+# 1 otherwise. The single definition of both the default and the clamp, so a
+# caller's refusal names the same number the loop used.
+fm_backend_cmux_settle_tries() {
+  local tries=${FM_BACKEND_CMUX_SETTLE_TRIES:-40}
+  case "$tries" in
+    ''|*[!0-9]*) tries=1 ;;
+  esac
+  [ "$tries" -ge 1 ] || tries=1
+  printf '%s' "$tries"
+}
 
 # fm_backend_cmux_settle: run <resolver...> until it echoes something
-# non-empty, at most FM_BACKEND_CMUX_SETTLE_TRIES times with
+# non-empty, at most fm_backend_cmux_settle_tries times with
 # FM_BACKEND_CMUX_SETTLE_DELAY between attempts. Echoes the first non-empty
 # result and returns 0; returns 1 with no output once the bound is spent, so
 # a genuinely unresolvable id stays the caller's loud refusal rather than
 # becoming a silent success or an unbounded wait.
 fm_backend_cmux_settle() {  # <resolver-command...>
-  local tries=${FM_BACKEND_CMUX_SETTLE_TRIES:-40} delay=${FM_BACKEND_CMUX_SETTLE_DELAY:-0.25}
+  local delay=${FM_BACKEND_CMUX_SETTLE_DELAY:-0.25} tries
   local attempt=1 out
-  case "$tries" in
-    ''|*[!0-9]*) tries=1 ;;
-  esac
-  [ "$tries" -ge 1 ] || tries=1
+  tries=$(fm_backend_cmux_settle_tries)
   while :; do
     out=$("$@")
     if [ -n "$out" ]; then
@@ -416,7 +426,7 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     return 1
   }
   wsid=$(fm_backend_cmux_settle fm_backend_cmux_workspace_id_for_label "$title")
-  [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation (retried ${FM_BACKEND_CMUX_SETTLE_TRIES:-40} times)" >&2; return 1; }
+  [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation (gave up after $(fm_backend_cmux_settle_tries) attempts)" >&2; return 1; }
   sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
   [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
   printf '%s %s' "$wsid" "$sfid"
