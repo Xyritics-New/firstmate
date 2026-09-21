@@ -87,6 +87,10 @@ A genuinely fresh surface returns an internal error from `read-screen` until som
 Target readiness therefore uses the structural `list-panes` response instead of a content read.
 Capture remains bounded and locally trimmed after `read-screen` becomes available.
 
+`workspace list` is not read-your-writes against `new-workspace`: a list issued immediately after a successful create can be served a snapshot taken before the new workspace was published.
+Task creation therefore re-reads that resolve over a bounded settle window instead of trusting one list, and still refuses loudly, naming the attempt bound it spent, when the workspace never appears.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#post-creation-workspace-snapshot) owns the dated evidence and the command that refreshes it.
+
 `current_directory` follows a top-level shell `cd` but not the foreground subshell opened by `treehouse get`.
 Spawn-time worktree discovery sends begin and end markers around `pwd`, captures the marked block, and joins wrapped path lines.
 
