@@ -22,7 +22,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROUNDS=${FM_CMUX_WORKSPACE_SETTLE_ROUNDS:-5}
 
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
@@ -92,11 +91,11 @@ cleanup_all() {
 trap cleanup_all EXIT
 
 ROUND=1
-while [ "$ROUND" -le "$ROUNDS" ]; do
+while [ "$ROUND" -le 5 ]; do
   LABEL="fm-test-settle-$$-$ROUND"
   OPEN_LABEL=$LABEL
   IDS=$(fm_backend_cmux_create_task "$LABEL" /tmp) \
-    || fail "$CMUX_VERSION: fm_backend_cmux_create_task failed on round $ROUND of $ROUNDS - the post-creation settle did not absorb cmux's stale workspace snapshot"
+    || fail "$CMUX_VERSION: fm_backend_cmux_create_task failed on round $ROUND of 5 - the post-creation settle did not absorb cmux's stale workspace snapshot"
   read -r WSID SFID <<CREATED
 $IDS
 CREATED
@@ -110,4 +109,4 @@ CREATED
   ROUND=$((ROUND + 1))
 done
 
-pass "real cmux ($CMUX_VERSION): create_task resolved its new workspace and surface on all $ROUNDS rounds"
+pass "real cmux ($CMUX_VERSION): create_task resolved its new workspace and surface on all 5 rounds"
