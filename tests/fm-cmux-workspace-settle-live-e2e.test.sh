@@ -21,22 +21,6 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
-pass() { printf 'ok - %s\n' "$1"; }
-
-# The cmux CLI ships inside the app bundle and only lands on PATH when the
-# operator ran cmux's optional "install CLI" action, so make the bundle copy
-# visible before the gate decides whether this host can run the guard.
-BUNDLE_BIN=${FM_BACKEND_CMUX_BUNDLE_BIN:-/Applications/cmux.app/Contents/Resources/bin/cmux}
-if ! command -v cmux >/dev/null 2>&1 && [ -x "$BUNDLE_BIN" ]; then
-  PATH="$(dirname "$BUNDLE_BIN"):$PATH"
-  export PATH
-fi
-
-fm_live_gate default-on FM_CMUX_WORKSPACE_SETTLE_LIVE cmux jq
-
 # A cmux that cannot be identified, is below the adapter's verified minimum, or
 # whose control socket is unreachable is the same class of host-capability gap
 # fm_live_gate already decides for an absent tool, so it takes the same verdict:
@@ -55,13 +39,23 @@ gate_gap() {  # <message>
   exit 0
 }
 
-CMUX_VERSION=$(cmux version 2>/dev/null | head -1)
-[ -n "$CMUX_VERSION" ] \
-  || gate_gap "cmux is installed but 'cmux version' produced nothing, so this host has no identifiable cmux to report a pass against"
-
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source cmux || gate_gap "could not source the cmux adapter"
+
+# The cmux CLI ships inside the app bundle and only lands on PATH when the
+# operator ran cmux's optional "install CLI" action, so make the bundle copy
+# visible before the gate decides whether this host can run the guard.
+if ! command -v cmux >/dev/null 2>&1 && [ -x "$FM_BACKEND_CMUX_BUNDLE_BIN" ]; then
+  PATH="$(dirname "$FM_BACKEND_CMUX_BUNDLE_BIN"):$PATH"
+  export PATH
+fi
+
+fm_live_gate default-on FM_CMUX_WORKSPACE_SETTLE_LIVE cmux jq
+
+CMUX_VERSION=$(cmux version 2>/dev/null | head -1)
+[ -n "$CMUX_VERSION" ] \
+  || gate_gap "cmux is installed but 'cmux version' produced nothing, so this host has no identifiable cmux to report a pass against"
 
 fm_backend_cmux_version_check >/dev/null 2>&1 \
   || gate_gap "installed cmux is older than the verified minimum the adapter requires"
@@ -73,27 +67,53 @@ PING_STATE=$(fm_backend_cmux_ping_state)
 # shellcheck source=tests/cmux-test-safety.sh
 . "$ROOT/tests/cmux-test-safety.sh"
 
-# The guard holds at most one workspace open at a time, so OPEN_LABEL names it:
-# set BEFORE the create call, so a failure anywhere between the create and the
-# id resolve still leaves the EXIT trap something to close, and cleared once the
-# round's own guarded close has taken it. Teardown resolves the label's scoped
-# title through the adapter's own settled read - a workspace abandoned by a
-# failed create_task is abandoned precisely because cmux has not published it
-# yet - and hands the id to tests/cmux-test-safety.sh's guarded close.
-OPEN_LABEL=""
+# TRACKED_LABELS carries every label this guard has created and not yet seen
+# gone: appended BEFORE the create call, so a failure anywhere between the
+# create and the id resolve still leaves the EXIT trap something to close, and
+# dropped only once the scoped title no longer resolves to a live workspace -
+# cmux's close-workspace reports OK even where it silently declines to act, so
+# the listing, not the close's exit status, is what retires a record.
+TRACKED_LABELS=""
+
+track_label() {  # <label>
+  TRACKED_LABELS="$TRACKED_LABELS$1
+"
+}
+
+# Teardown resolves through the adapter's settled read: every label still held
+# here is one cmux is expected to be showing, either because a failed
+# create_task abandoned a workspace cmux has not published yet or because a
+# close did not take.
+untrack_closed_label() {  # <label>
+  local label=$1 kept="" entry
+  [ -z "$(fm_backend_cmux_workspace_id_for_label "$(fm_backend_cmux_scoped_title "$label")")" ] || return 0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    [ "$entry" = "$label" ] || kept="$kept$entry
+"
+  done <<TRACKED
+$TRACKED_LABELS
+TRACKED
+  TRACKED_LABELS=$kept
+}
 
 cleanup_all() {
-  local wsid
-  [ -n "$OPEN_LABEL" ] || return 0
-  wsid=$(fm_backend_cmux_workspace_id_settled "$(fm_backend_cmux_scoped_title "$OPEN_LABEL")")
-  [ -z "$wsid" ] || cmux_safe_close_workspace "$wsid" "$OPEN_LABEL"
+  local entry wsid
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    wsid=$(fm_backend_cmux_workspace_id_settled "$(fm_backend_cmux_scoped_title "$entry")")
+    [ -z "$wsid" ] || cmux_safe_close_workspace "$wsid" "$entry"
+  done <<TRACKED
+$TRACKED_LABELS
+TRACKED
+  fm_test_cleanup
 }
 trap cleanup_all EXIT
 
 ROUND=1
 while [ "$ROUND" -le 5 ]; do
   LABEL="fm-test-settle-$$-$ROUND"
-  OPEN_LABEL=$LABEL
+  track_label "$LABEL"
   IDS=$(fm_backend_cmux_create_task "$LABEL" /tmp) \
     || fail "$CMUX_VERSION: fm_backend_cmux_create_task failed on round $ROUND of 5 - the post-creation settle did not absorb cmux's stale workspace snapshot"
   read -r WSID SFID <<CREATED
@@ -104,7 +124,7 @@ CREATED
   fm_backend_cmux_surface_exists "$WSID" "$SFID" \
     || fail "$CMUX_VERSION: create_task's resolved surface $SFID is not live in workspace $WSID on round $ROUND"
   cmux_safe_close_workspace "$WSID" "$LABEL"
-  OPEN_LABEL=""
+  untrack_closed_label "$LABEL"
 
   ROUND=$((ROUND + 1))
 done
