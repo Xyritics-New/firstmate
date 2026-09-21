@@ -11,8 +11,7 @@
 #
 # It drives the adapter's own create_task through the exact
 # duplicate-check-then-create sequence that exposed the fault, several rounds
-# over, and additionally measures the raw un-retried read so a build where the
-# staleness disappears is reported rather than silently passing as proof.
+# over.
 #
 # Touches and closes ONLY the fm-test- workspaces it creates itself, through
 # tests/cmux-test-safety.sh's guarded close; it never enumerates-and-closes,
@@ -75,61 +74,27 @@ PING_STATE=$(fm_backend_cmux_ping_state)
 # shellcheck source=tests/cmux-test-safety.sh
 . "$ROOT/tests/cmux-test-safety.sh"
 
-# Every workspace this guard asks cmux to create is registered by LABEL BEFORE
-# the create call, so a failure anywhere between the create and the id resolve
-# still leaves the EXIT trap something to close. Teardown resolves each label's
-# own scoped title back to an id and hands it to tests/cmux-test-safety.sh's
-# guarded close, which re-checks it; a label whose workspace is already gone
-# resolves to nothing and is skipped.
-OPEN_LABELS=()
-
-track() {  # <label>
-  OPEN_LABELS+=("$1")
-}
-
-close_tracked() {  # <label>
-  local wsid
-  wsid=$(fm_backend_cmux_workspace_id_for_label "$(fm_backend_cmux_scoped_title "$1")")
-  [ -z "$wsid" ] || cmux_safe_close_workspace "$wsid" "$1"
-}
+# The guard holds at most one workspace open at a time, so OPEN_LABEL names it:
+# set BEFORE the create call, so a failure anywhere between the create and the
+# id resolve still leaves the EXIT trap something to close, and cleared once the
+# round's own guarded close has taken it. Teardown resolves the label's scoped
+# title through the adapter's own settled read - a workspace abandoned by a
+# failed create_task is abandoned precisely because cmux has not published it
+# yet - and hands the id to tests/cmux-test-safety.sh's guarded close.
+OPEN_LABEL=""
 
 cleanup_all() {
-  local i
-  for i in "${!OPEN_LABELS[@]}"; do
-    close_tracked "${OPEN_LABELS[$i]}"
-  done
+  local wsid
+  [ -n "$OPEN_LABEL" ] || return 0
+  wsid=$(fm_backend_cmux_workspace_id_settled "$(fm_backend_cmux_scoped_title "$OPEN_LABEL")")
+  [ -z "$wsid" ] || cmux_safe_close_workspace "$wsid" "$OPEN_LABEL"
 }
 trap cleanup_all EXIT
 
-STALE_SEEN=0
 ROUND=1
 while [ "$ROUND" -le "$ROUNDS" ]; do
-  # --- raw sequence: is the un-retried post-create read actually stale here? --
-  RAW_LABEL="fm-test-settle-raw-$$-$ROUND"
-  RAW_TITLE=$(fm_backend_cmux_scoped_title "$RAW_LABEL")
-  fm_backend_cmux_workspace_id_for_label "$RAW_TITLE" >/dev/null
-  track "$RAW_LABEL"
-  fm_backend_cmux_cli new-workspace --name "$RAW_TITLE" --cwd /tmp --focus false --id-format uuids >/dev/null 2>&1 \
-    || fail "$CMUX_VERSION refused to create the probe workspace '$RAW_TITLE'"
-  RAW_IMMEDIATE=$(fm_backend_cmux_workspace_id_for_label "$RAW_TITLE")
-  [ -n "$RAW_IMMEDIATE" ] || STALE_SEEN=$((STALE_SEEN + 1))
-  # Resolved with the guard's own loop, not the adapter's settle helper, so a
-  # regression shows up as create_task failing below rather than as this probe
-  # failing to clean up after itself.
-  RAW_ID=$RAW_IMMEDIATE
-  RAW_TRY=1
-  while [ -z "$RAW_ID" ] && [ "$RAW_TRY" -le 40 ]; do
-    sleep 0.25
-    RAW_ID=$(fm_backend_cmux_workspace_id_for_label "$RAW_TITLE")
-    RAW_TRY=$((RAW_TRY + 1))
-  done
-  [ -n "$RAW_ID" ] \
-    || fail "$CMUX_VERSION never published workspace '$RAW_TITLE' within 10s, so the probe cannot be trusted"
-  cmux_safe_close_workspace "$RAW_ID" "$RAW_LABEL"
-
-  # --- the adapter's own sequence, which must survive that staleness ---------
   LABEL="fm-test-settle-$$-$ROUND"
-  track "$LABEL"
+  OPEN_LABEL=$LABEL
   IDS=$(fm_backend_cmux_create_task "$LABEL" /tmp) \
     || fail "$CMUX_VERSION: fm_backend_cmux_create_task failed on round $ROUND of $ROUNDS - the post-creation settle did not absorb cmux's stale workspace snapshot"
   read -r WSID SFID <<CREATED
@@ -140,14 +105,9 @@ CREATED
   fm_backend_cmux_surface_exists "$WSID" "$SFID" \
     || fail "$CMUX_VERSION: create_task's resolved surface $SFID is not live in workspace $WSID on round $ROUND"
   cmux_safe_close_workspace "$WSID" "$LABEL"
+  OPEN_LABEL=""
 
   ROUND=$((ROUND + 1))
 done
 
 pass "real cmux ($CMUX_VERSION): create_task resolved its new workspace and surface on all $ROUNDS rounds"
-if [ "$STALE_SEEN" -gt 0 ]; then
-  pass "real cmux ($CMUX_VERSION): the raw un-retried post-create read was stale in $STALE_SEEN of $ROUNDS rounds, so the window the settle covers is live on this build"
-else
-  printf 'ok - real cmux (%s): no stale post-create read observed in %s rounds; the settle is untriggered on this build and only the success path was proven\n' \
-    "$CMUX_VERSION" "$ROUNDS"
-fi

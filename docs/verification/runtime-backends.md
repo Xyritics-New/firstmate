@@ -1648,7 +1648,7 @@ sleep 1; query -> 7E517926-4039-48D3-BAA5-7EFF5B2ECE73
 
 `fm_backend_cmux_create_task` therefore gives that post-creation `workspace list` resolve a bounded retry window and keeps its refusal once that bound is spent.
 Only `workspace list` was observed stale: the post-create `list-panes` read was never seen serving a snapshot predating the workspace, so it stays un-retried and its behaviour in this window is unobserved rather than verified either way.
-The live guard's raw un-retried probe reproduced the stale read in 1 to 2 of 5 rounds on this build, while every `fm_backend_cmux_create_task` call resolved its workspace and surface.
+The stale read reproduced on this build while the settle was being developed; the live guard no longer measures it separately, and proves only that every `fm_backend_cmux_create_task` call resolved its workspace and surface through the sequence that exposed the fault.
 The dated proof and the command that refreshes this entry:
 
 ```sh
@@ -1657,7 +1657,6 @@ bin/fm-test-run.sh tests/fm-cmux-workspace-settle-live-e2e.test.sh
 
 ```text
 ok - real cmux (cmux 0.64.25 (106) [b685a275c]): create_task resolved its new workspace and surface on all 5 rounds
-ok - real cmux (cmux 0.64.25 (106) [b685a275c]): the raw un-retried post-create read was stale in 1 of 5 rounds, so the window the settle covers is live on this build
 ```
 
 The portable regression is `tests/fm-backend-cmux.test.sh`.
