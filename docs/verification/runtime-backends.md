@@ -1646,7 +1646,8 @@ query  -> EMPTY
 sleep 1; query -> 7E517926-4039-48D3-BAA5-7EFF5B2ECE73
 ```
 
-`fm_backend_cmux_create_task` therefore gives both post-creation reads a bounded retry window and keeps its refusal once that bound is spent.
+`fm_backend_cmux_create_task` therefore gives that post-creation `workspace list` resolve a bounded retry window and keeps its refusal once that bound is spent.
+Only `workspace list` was observed stale: the post-create `list-panes` read was never seen serving a snapshot predating the workspace, so it stays un-retried and its behaviour in this window is unobserved rather than verified either way.
 The live guard observed the stale read in 1 to 2 of 5 rounds on this build while every `fm_backend_cmux_create_task` call resolved its workspace and surface.
 The dated proof and the command that refreshes this entry:
 

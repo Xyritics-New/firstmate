@@ -531,27 +531,6 @@ test_create_task_retries_stale_post_create_workspace_list() {
   pass "fm_backend_cmux_create_task: re-reads a stale post-create workspace list instead of aborting the spawn"
 }
 
-test_create_task_retries_stale_post_create_surface() {
-  local dir fb out title
-  dir="$TMP_ROOT/create-task-stale-panes"; mkdir -p "$dir/responses"
-  title=$(cmux_expected_scoped_title fm-stalepanes)
-  printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  cmux_workspace_list_response "$dir" 3 "ffffffff-5555-5555-5555-555555555555" "$title"
-  # 4: list-panes -> STALE, the fresh workspace has no surface yet
-  cmux_panes_empty_response "$dir" 4
-  # 5: list-panes retry -> the default surface is now visible
-  cmux_panes_response "$dir" 5 "99999999-6666-6666-6666-666666666666"
-  fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    FM_BACKEND_CMUX_SETTLE_TRIES=5 FM_BACKEND_CMUX_SETTLE_DELAY=0 \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-stalepanes /tmp/proj' "$ROOT" )
-  [ "$out" = "ffffffff-5555-5555-5555-555555555555 99999999-6666-6666-6666-666666666666" ] \
-    || fail "create_task should retry a stale post-create list-panes read, got '$out'"
-  [ "$(cmux_log_count "$dir/log" list-panes)" -eq 2 ] \
-    || fail "create_task should have re-read list-panes once after the empty snapshot"
-  pass "fm_backend_cmux_create_task: re-reads a stale post-create surface list instead of aborting the spawn"
-}
-
 test_create_task_refuses_when_settle_bound_is_spent() {
   local dir fb out status n
   dir="$TMP_ROOT/create-task-bound"; mkdir -p "$dir/responses"
@@ -1219,7 +1198,6 @@ test_ensure_running_fails_fast_on_unauth_without_launching
 test_create_task_refuses_duplicate_label
 test_create_task_creates_and_parses_ids
 test_create_task_retries_stale_post_create_workspace_list
-test_create_task_retries_stale_post_create_surface
 test_create_task_refuses_when_settle_bound_is_spent
 test_settle_returns_first_non_empty_result_without_extra_calls
 test_target_ready_fails_when_target_absent

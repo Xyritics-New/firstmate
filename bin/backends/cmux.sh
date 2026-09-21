@@ -89,9 +89,13 @@
 #      correctly on a re-read a moment later. Observed only when a list call
 #      precedes the create in the same sequence, which is exactly the adapter's
 #      own duplicate-check-then-create shape, so it never reproduced in a bare
-#      create-then-read probe. fm_backend_cmux_settle gives both post-creation
-#      reads a bounded retry window; the duplicate check itself must stay,
+#      create-then-read probe. fm_backend_cmux_settle gives that post-creation
+#      resolve a bounded retry window; the duplicate check itself must stay,
 #      since finding #6 leaves title uniqueness entirely to this adapter.
+#      Scope: only `workspace list` was observed serving a stale snapshot. The
+#      post-create `list-panes` read was never seen stale and is left
+#      un-retried; finding #3 covers a different window (an untouched fresh
+#      surface), so it says nothing either way about this one.
 #
 #   Unanticipated finding, load-bearing for this adapter: the control socket
 #   defaults to `socketControlMode=cmuxOnly`, which REJECTS any CLI process
@@ -351,9 +355,9 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
     | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
 }
 
-# Bounded post-creation settle window for the two reads that run immediately
-# after `new-workspace`. Verified live (cmux 0.64.25, macOS aarch64,
-# 2026-09-21, docs/verification/runtime-backends.md): a `workspace list` issued
+# Bounded post-creation settle window for the `workspace list` read that
+# resolves a freshly created workspace's id. Verified live (cmux 0.64.25,
+# macOS aarch64, 2026-09-21, docs/verification/runtime-backends.md): a list issued
 # straight after a successful `new-workspace` can be served a snapshot taken
 # before the new workspace was published, returning EMPTY for a workspace that
 # certainly exists, and resolving correctly on a re-read a moment later.
@@ -388,12 +392,13 @@ fm_backend_cmux_settle() {  # <resolver-command...>
 
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
 # refusing an existing live <label> (finding #6: cmux enforces no uniqueness
-# itself). Both post-creation reads go through fm_backend_cmux_settle, because
-# cmux can serve either of them a snapshot predating the workspace it was just
-# told to create; the bound is explicit and an exhausted bound is still the
-# loud refusal below. Resolves the fresh workspace's default surface via one
-# list-panes call (finding: a freshly created workspace already has exactly
-# one surface, so no separate new-surface call is needed). --focus false is passed for
+# itself). The post-creation `workspace list` resolve goes through
+# fm_backend_cmux_settle, because cmux can serve it a snapshot predating the
+# workspace it was just told to create (finding #7); the bound is explicit and
+# an exhausted bound is still the loud refusal below. Resolves the fresh
+# workspace's default surface via one un-retried list-panes call (finding: a
+# freshly created workspace already has exactly one surface, so no separate
+# new-surface call is needed). --focus false is passed for
 # defense in depth though verified to already be the default (finding:
 # workspace/surface/pane create all default focus to false) - no
 # focus-restore dance is needed, unlike zellij. Echoes "<workspace_id>
@@ -412,8 +417,8 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
   }
   wsid=$(fm_backend_cmux_settle fm_backend_cmux_workspace_id_for_label "$title")
   [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation (retried ${FM_BACKEND_CMUX_SETTLE_TRIES:-40} times)" >&2; return 1; }
-  sfid=$(fm_backend_cmux_settle fm_backend_cmux_surface_id_for_workspace "$wsid")
-  [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid) (retried ${FM_BACKEND_CMUX_SETTLE_TRIES:-40} times)" >&2; return 1; }
+  sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
+  [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
   printf '%s %s' "$wsid" "$sfid"
 }
 
