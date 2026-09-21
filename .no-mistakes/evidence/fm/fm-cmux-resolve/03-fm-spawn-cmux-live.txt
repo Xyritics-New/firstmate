@@ -1,0 +1,62 @@
+=== bin/fm-spawn.sh test-cmuxspawn-7515 <project> --backend cmux ===
+--- stdout ---
+spawned test-cmuxspawn-7515 harness=sh kind=ship mode=no-mistakes yolo=off window=8C5A52E5-0317-4C67-9DCC-9E5A06779ACF:F8F4473E-9B03-4BBF-9C5D-AF7D99F7D01E worktree=/Users/nicholasmartin/.treehouse/scratch-project-c3223c/1/scratch-project
+--- stderr ---
+warning: /private/var/folders/38/r1d9kgsd0_x2bvbkglvjml200000gn/T/fm-cmux-spawn-live.tYtAXg/data/test-cmuxspawn-7515/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+--- exit: 0 ---
+
+=== recorded task state (state/test-cmuxspawn-7515.meta) ===
+window=8C5A52E5-0317-4C67-9DCC-9E5A06779ACF:F8F4473E-9B03-4BBF-9C5D-AF7D99F7D01E
+endpoint_task_id=test-cmuxspawn-7515
+worktree=/Users/nicholasmartin/.treehouse/scratch-project-c3223c/1/scratch-project
+project=/private/var/folders/38/r1d9kgsd0_x2bvbkglvjml200000gn/T/fm-cmux-spawn-live.tYtAXg/scratch-project
+harness=sh
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-test-cmuxspawn-7515
+model=default
+effort=default
+spawn_gen=s1789987424.7531.24510
+backend=cmux
+cmux_workspace_id=8C5A52E5-0317-4C67-9DCC-9E5A06779ACF
+cmux_surface_id=F8F4473E-9B03-4BBF-9C5D-AF7D99F7D01E
+
+=== the worker's workspace as the live cmux app reports it ===
+workspace 8C5A52E5-0317-4C67-9DCC-9E5A06779ACF  title fm-firstmate-f234c421-test-cmuxspawn-7515
+recorded endpoint: 8C5A52E5-0317-4C67-9DCC-9E5A06779ACF:F8F4473E-9B03-4BBF-9C5D-AF7D99F7D01E
+--- fm_backend_cmux_capture of the worker surface ---
+quote> ' '__FM_CMUX_CWD_END__'
+__FM_CMUX_CWD_BEGIN__
+/Users/nicholasmartin/.treehouse/scratch-project-c3223c/1/scratch-project
+__FM_CMUX_CWD_END__
+nicholasmartin@Mac scratch-project % printf '%s
+quote> ' '__FM_CMUX_CWD_BEGIN__'; pwd; printf '%s
+quote> ' '__FM_CMUX_CWD_END__'
+__FM_CMUX_CWD_BEGIN__
+/Users/nicholasmartin/.treehouse/scratch-project-c3223c/1/scratch-project
+__FM_CMUX_CWD_END__
+nicholasmartin@Mac scratch-project % export GOTMPDIR=/tmp/fm-test-cmuxspawn-7515/gotmp
+nicholasmartin@Mac scratch-project % export COMPACT_ADVISER_DISABLE=1
+nicholasmartin@Mac scratch-project % export FM_TASK_ID=test-cmuxspawn-7515
+nicholasmartin@Mac scratch-project % . '/tmp/fm-test-cmuxspawn-7515+e2cba94ad6e1719fb91b58b1642185943a631dc67a57d03dfb12b454c8df7fb4/launch.s1789987424.7531.24510.sh'
+cmux-spawn-live-ok
+=== knock-on: duplicate check still refuses a second launch of the same label ===
+create_task('fm-test-cmuxspawn-7515') -> rc=1  error: cmux workspace 'fm-firstmate-f234c421-test-cmuxspawn-7515' already exists
+
+=== bin/fm-teardown.sh test-cmuxspawn-7515 (the operator's own cleanup path) ===
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+teardown: reaping leaked worktree process(es) for test-cmuxspawn-7515: 8348 9874
+teardown: force-killing leaked worktree process(es) for test-cmuxspawn-7515: 8348
+🌳 Worktree returned to pool.
+/private/var/folders/38/r1d9kgsd0_x2bvbkglvjml200000gn/T/fm-cmux-spawn-live.tYtAXg/scratch-project: already current
+teardown test-cmuxspawn-7515 complete (window 8C5A52E5-0317-4C67-9DCC-9E5A06779ACF:F8F4473E-9B03-4BBF-9C5D-AF7D99F7D01E, worktree /Users/nicholasmartin/.treehouse/scratch-project-c3223c/1/scratch-project)
+Backlog: test-cmuxspawn-7515 just finished (this home keeps no markdown backlog at /private/var/folders/38/r1d9kgsd0_x2bvbkglvjml200000gn/T/fm-cmux-spawn-live.tYtAXg/data/backlog.md). Update /private/var/folders/38/r1d9kgsd0_x2bvbkglvjml200000gn/T/fm-cmux-spawn-live.tYtAXg/data/backlog.md - move test-cmuxspawn-7515 to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+--- workspaces carrying this task's title after teardown ---
+<none>

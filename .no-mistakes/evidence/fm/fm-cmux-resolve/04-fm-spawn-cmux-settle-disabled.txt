@@ -1,0 +1,12 @@
+=== bin/fm-spawn.sh test-cmuxspawn-tries1-12371 <project> --backend cmux ===
+--- stdout ---
+--- stderr ---
+warning: /private/var/folders/38/r1d9kgsd0_x2bvbkglvjml200000gn/T/fm-cmux-spawn-live.PBPB5z/data/test-cmuxspawn-tries1-12371/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: could not resolve a cmux workspace id for 'fm-firstmate-f234c421-test-cmuxspawn-tries1-12371' after creation (gave up after 1 attempts)
+--- exit: 1 ---
+
+=== recorded task state (state/test-cmuxspawn-tries1-12371.meta) ===
+(no meta written)
+
+=== the worker's workspace as the live cmux app reports it ===
+workspace 0BBC1E75-CEE3-4CAE-AE7D-497E021F7724  title fm-firstmate-f234c421-test-cmuxspawn-tries1-12371

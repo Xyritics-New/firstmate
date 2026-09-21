@@ -1,0 +1,4 @@
+orphan left by the failed spawn: 0BBC1E75-CEE3-4CAE-AE7D-497E021F7724 (fm-firstmate-f234c421-test-cmuxspawn-tries1-12371)
+guarded close: done
+--- workspaces now ---
+638CC0CB-44C2-4A89-ABC6-FA7583837ADF  wayfinder · wayfinder-smoke

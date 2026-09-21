@@ -1,0 +1,9 @@
+round 1: FAIL  error: could not resolve a cmux workspace id for 'fm-firstmate-85fb1818-test-prefix-3432-1' after creation
+        teardown: closed 6873BE8E-09E6-41F5-8C72-16C181F68442 (fm-firstmate-85fb1818-test-prefix-3432-1)
+round 2: FAIL  error: could not resolve a cmux workspace id for 'fm-firstmate-85fb1818-test-prefix-3432-2' after creation
+        teardown: closed 71987E99-23A8-4266-A807-EA15BB674B2A (fm-firstmate-85fb1818-test-prefix-3432-2)
+round 3: FAIL  error: could not resolve a cmux workspace id for 'fm-firstmate-85fb1818-test-prefix-3432-3' after creation
+        teardown: closed 3C62076D-616C-4508-8A00-94051F67AE70 (fm-firstmate-85fb1818-test-prefix-3432-3)
+round 4: FAIL  error: could not resolve a cmux workspace id for 'fm-firstmate-85fb1818-test-prefix-3432-4' after creation
+        teardown: closed 376A100D-E219-4794-AA35-8ED7A42A9A3A (fm-firstmate-85fb1818-test-prefix-3432-4)
+summary: 4/4 rounds failed
