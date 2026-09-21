@@ -550,19 +550,6 @@ test_create_task_refuses_when_settle_bound_is_spent() {
   pass "fm_backend_cmux_create_task: keeps its loud refusal and stops at the configured retry bound"
 }
 
-test_settle_returns_first_non_empty_result_without_extra_calls() {
-  local dir out
-  dir="$TMP_ROOT/settle-immediate"; mkdir -p "$dir"
-  out=$( FM_SETTLE_MARK="$dir/calls" FM_BACKEND_CMUX_SETTLE_TRIES=5 FM_BACKEND_CMUX_SETTLE_DELAY=0 \
-    bash -c '. "$0/bin/backends/cmux.sh"
-      probe() { echo probed >> "$FM_SETTLE_MARK"; printf "resolved-id"; }
-      fm_backend_cmux_settle probe' "$ROOT" )
-  [ "$out" = "resolved-id" ] || fail "settle should echo the resolver's first non-empty result, got '$out'"
-  [ "$(wc -l < "$dir/calls" | tr -d ' ')" = "1" ] \
-    || fail "settle should not re-run a resolver that already answered"
-  pass "fm_backend_cmux_settle: returns the first non-empty result without a further attempt"
-}
-
 # --- target_ready / capture ---------------------------------------------------
 
 test_target_ready_fails_when_target_absent() {
@@ -1199,7 +1186,6 @@ test_create_task_refuses_duplicate_label
 test_create_task_creates_and_parses_ids
 test_create_task_retries_stale_post_create_workspace_list
 test_create_task_refuses_when_settle_bound_is_spent
-test_settle_returns_first_non_empty_result_without_extra_calls
 test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch
