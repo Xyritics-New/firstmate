@@ -2269,6 +2269,15 @@ collect_local_firstmate_states() {
   done
 }
 
+# A record is only OTHER when it is a different FILE, not a different spelling:
+# the same home reached through a symlink or an aliased ancestor (/tmp against
+# its real /private/tmp) gives the record's own meta and the scanned state dir
+# two names for one file. Compared as written, the record collides with itself,
+# the scan reads one live slot as two tasks holding it, and teardown refuses a
+# cleanup the task is entitled to. So both sides are resolved to their physical
+# directory before the comparison; the basename is left as written, since the
+# scan below rejects symlinked *.meta entries, so a link is never one of the
+# two names.
 require_exclusive_worktree_slot_record() {
   local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
   local slot state_dir other other_id field other_path other_slot
