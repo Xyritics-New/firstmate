@@ -1,0 +1,41 @@
+# fm-teardown aliased-home self-collision - live CLI transcript
+# host: Darwin 25.6.0   bash: 3.2.57(1)-release
+
+==========================================================================
+S1  Teardown through an aliased FM_HOME - WITH the fix (aec774e)
+==========================================================================
+  FM_HOME as spelled    : /tmp/fm-ev-s1/home
+  FM_HOME as resolved   : /private/tmp/fm-ev-s1/home
+  task record before    : cmux-resolve-task.meta 
+$ FM_HOME=/tmp/fm-ev-s1/home bin/fm-teardown.sh cmux-resolve-task --force
+ teardown cmux-resolve-task complete (window firstmate:fm-cmux-resolve-task, worktree /tmp/fm-ev-s1/worktree)
+ Backlog: cmux-resolve-task just finished (this home keeps no markdown backlog at /private/tmp/fm-ev-s1/home/data/backlog.md). Update /private/tmp/fm-ev-s1/home/data/backlog.md - move cmux-resolve-task to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+  exit code             : 0
+  task record after     : home-summary.json terminal-outcomes <- the task record is gone
+  runtime calls made    :
+    treehouse <return> <--force> </tmp/fm-ev-s1/worktree>
+    tmux <kill-window> <-t> <=firstmate:=fm-cmux-resolve-task>
+
+==========================================================================
+S2  Identical fixture and command - PRE-FIX product (base 6f0f139)
+==========================================================================
+$ FM_HOME=/tmp/fm-ev-s2/home bin/fm-teardown.sh cmux-resolve-task --force
+ REFUSED: task cmux-resolve-task's recorded worktree /private/tmp/fm-ev-s2/pool/1/project is also task cmux-resolve-task's recorded worktree.
+ Returning that pool slot would kill cmux-resolve-task's processes and reset its copy, so nothing was changed - not even with --force.
+ Reconcile whichever record is wrong (bin/fm-crew-state.sh cmux-resolve-task; bin/fm-crew-state.sh cmux-resolve-task), then re-run teardown.
+  exit code             : 1
+  task record after     : cmux-resolve-task.meta <- stranded, cleanup refused
+  runtime calls made    : (none - the pool slot was never returned)
+
+==========================================================================
+S3  Adversarial - a genuine second record on the same slot, aliased home
+==========================================================================
+  task records before   : cmux-resolve-task.meta neighbour-task.meta 
+$ FM_HOME=/tmp/fm-ev-s3/home bin/fm-teardown.sh cmux-resolve-task --force
+ REFUSED: task cmux-resolve-task's recorded worktree /private/tmp/fm-ev-s3/pool/1/project is also task neighbour-task's recorded worktree.
+ Returning that pool slot would kill neighbour-task's processes and reset its copy, so nothing was changed - not even with --force.
+ Reconcile whichever record is wrong (bin/fm-crew-state.sh cmux-resolve-task; bin/fm-crew-state.sh neighbour-task), then re-run teardown.
+  exit code             : 1
+  task records after    : cmux-resolve-task.meta neighbour-task.meta <- both preserved
+  pool slot after       : sentinel <- sentinel intact, slot not reset
+  runtime calls made    : (none - nothing was killed)

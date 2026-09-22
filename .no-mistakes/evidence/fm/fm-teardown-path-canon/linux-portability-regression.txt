@@ -1,0 +1,15 @@
+# Portability check: the new aliased-home regression driven on real Linux
+# host: Linux 6.12.72-linuxkit GNU/Linux | git version 2.47.3 | bash 5.2.37(1)-release
+# TMPDIR=/work/tmp is canonical here, so the only path alias in play is the
+# home-alias symlink the fixture creates itself - no /private, no macOS.
+
+== Linux, WITH the fix (aec774e) ==
+ok - fm-teardown: equivalent home spellings do not self-collide
+exit code: 0
+
+== Linux, WITHOUT the fix (base 6f0f139) - same test, same fixture, red ==
+not ok - teardown refused its own slot through an aliased home: 
+REFUSED: task self-spelling's recorded worktree /work/tmp/fm-teardown-endpoint-safety.YpAf8w/self-spelling/pool/1/project is also task self-spelling's recorded worktree.
+Returning that pool slot would kill self-spelling's processes and reset its copy, so nothing was changed - not even with --force.
+Reconcile whichever record is wrong (bin/fm-crew-state.sh self-spelling; bin/fm-crew-state.sh self-spelling), then re-run teardown.
+exit code: 1
