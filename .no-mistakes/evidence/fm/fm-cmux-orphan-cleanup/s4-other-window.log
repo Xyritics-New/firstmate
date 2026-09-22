@@ -1,0 +1,20 @@
+window A (where the partial workspace will live): 8912587E-5AB4-4E84-90BF-9883C9C16799
+partial workspace: ref=workspace:301 uuid=D4E69560-887D-45A0-80C6-DDB814F6B8DF (created in window A)
+window B (opened second, now the frontmost/current window): 5AE99436-062E-402F-A5F4-0C093E47AB00
+
+--- what an unscoped 'workspace list' (CURRENT window only) sees ---
+  workspace:302	Terminal
+  => the ref is NOT visible there: a current-window-only absence check would call it removed
+
+--- the adapter's own every-window walk, which must still find it ---
+  window_of_workspace(workspace:301) = [8912587E-5AB4-4E84-90BF-9883C9C16799 4]
+
+--- cleanup while cmux answers OK to close-workspace and removes nothing ---
+  status: 1 (non-zero = did not claim a removal)
+  message: error: cmux close-workspace left 'fm-firstmate-584feda8-test-otherwin' (workspace:301) in place; preserving it
+  OK: refused to report removal for a workspace stranded in a non-current window
+
+--- the honest positive: a real cross-window close from window B ---
+  status: 0 (0 = removal confirmed)
+  live cmux, every window, workspaces carrying that title: [<none>]
+  OK: the cross-window close really removed it and said so

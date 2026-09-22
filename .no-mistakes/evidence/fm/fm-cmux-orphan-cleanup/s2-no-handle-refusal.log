@@ -1,0 +1,11 @@
+exit status: 1
+message to the operator: error: cmux new-workspace returned no workspace handle for 'fm-firstmate-584feda8-test-nohandle' (got 'OK'); preserving anything it created because this attempt cannot prove what it would remove
+
+--- every cmux call this create made ---
+workspace list --json --id-format uuids
+new-workspace --name fm-firstmate-584feda8-test-nohandle --cwd /tmp --focus false --id-format uuids
+---
+OK: no close-workspace was issued at all
+live cmux, workspaces carrying that title: [workspace:296 9E7E7CA8-8827-4B25-81E4-AFE074905300]
+OK: the workspace cmux actually made is preserved, not guessed at and deleted
+cleanup: removed by hand through the test safety guard

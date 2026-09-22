@@ -1,0 +1,5 @@
+workspace list --json --id-format uuids
+new-workspace --name fm-firstmate-584feda8-test-nohandle --cwd /tmp --focus false --id-format uuids
+workspace list --json --id-format both
+workspace list --json --id-format uuids
+close-workspace --workspace 9E7E7CA8-8827-4B25-81E4-AFE074905300

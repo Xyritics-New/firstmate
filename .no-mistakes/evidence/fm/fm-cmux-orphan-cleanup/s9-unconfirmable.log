@@ -1,0 +1,11 @@
+partial workspace workspace:314 in throwaway window B:
+    workspace:313	~
+    workspace:314	fm-firstmate-584feda8-test-unconfirmed
+
+--- cmux's close removes nothing AND the confirming window walk cannot be read ---
+  status: 1 (non-zero = did not claim a removal)
+  message: error: cmux could not confirm removal of the partial workspace 'fm-firstmate-584feda8-test-unconfirmed' (workspace:314); preserving it
+  OK: said removal was unproven rather than asserting it
+  window B afterwards (the workspace really is still there):
+    workspace:313	~
+    workspace:314	fm-firstmate-584feda8-test-unconfirmed

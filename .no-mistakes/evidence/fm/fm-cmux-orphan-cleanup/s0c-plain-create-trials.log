@@ -1,0 +1,3 @@
+trial 1: status=1 out=error: could not resolve a cmux workspace id for 'fm-firstmate-584feda8-test-plain1' (workspace:290) after creation; removed the partial workspace
+trial 2: status=1 out=error: could not resolve a cmux workspace id for 'fm-firstmate-584feda8-test-plain2' (workspace:291) after creation; removed the partial workspace
+trial 3: status=1 out=error: could not resolve a cmux workspace id for 'fm-firstmate-584feda8-test-plain3' (workspace:292) after creation; removed the partial workspace

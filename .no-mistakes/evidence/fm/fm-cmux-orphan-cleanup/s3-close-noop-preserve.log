@@ -1,0 +1,18 @@
+exit status: 1
+message to the operator: error: cmux close-workspace left 'fm-firstmate-584feda8-test-closenoop' (workspace:297) in place; preserving it
+OK: reported the workspace as still in place, not removed
+
+--- cmux calls made during cleanup ---
+workspace list --json --id-format uuids
+new-workspace --name fm-firstmate-584feda8-test-closenoop --cwd /tmp --focus false --id-format uuids
+workspace list --json --id-format both
+list-panes --workspace 1044B424-2A06-4C0D-8497-E259B9518B12 --json --id-format uuids
+list-windows --json --id-format uuids
+workspace list --json --id-format both --window 8912587E-5AB4-4E84-90BF-9883C9C16799
+close-workspace --workspace workspace:297
+list-windows --json --id-format uuids
+workspace list --json --id-format both --window 8912587E-5AB4-4E84-90BF-9883C9C16799
+---
+live cmux, workspaces carrying that title: [workspace:297 1044B424-2A06-4C0D-8497-E259B9518B12]
+OK: the workspace really is still there, matching what the operator was told
+cleanup: removed for real now that the injected no-op is off

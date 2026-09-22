@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Fault-injecting passthrough to the REAL cmux CLI.
+# Every call is forwarded to the live cmux app. The only things this adds are:
+#   FM_SETTLE=1     - pause after new-workspace so the app has published the
+#                     workspace before the adapter lists it (this machine
+#                     currently loses that race every time, at the base commit
+#                     too, which would otherwise make every create fail for an
+#                     unrelated reason)
+#   FM_FAULT=a,b    - break specific cmux calls, to stage the post-create
+#                     failures the change is about:
+#                       list-panes-once      surface lookup fails once
+#                       new-workspace-no-ref cmux creates but returns no handle
+#                       close-workspace-noop cmux answers OK, removes nothing
+REAL=/opt/homebrew/bin/cmux
+FAULTS=",${FM_FAULT:-},"
+has_fault() { case "$FAULTS" in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+[ -z "${FM_SHIM_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_SHIM_LOG"
+
+if [ "$1" = list-panes ] && has_fault list-panes-once && [ ! -e "${FM_FAULT_FLAG:-/nonexistent}" ]; then
+  : > "${FM_FAULT_FLAG}"
+  echo "shim: injected list-panes failure" >&2
+  exit 1
+fi
+if [ "$1" = list-windows ] && has_fault list-windows-fails; then
+  echo "shim: injected list-windows failure" >&2
+  exit 1
+fi
+if [ "$1" = close-workspace ] && has_fault close-workspace-noop; then
+  echo OK
+  exit 0
+fi
+if [ "$1" = new-workspace ] && has_fault sibling-fails; then
+  case " $* " in *" --window "*) echo "shim: injected sibling-create failure" >&2; exit 1 ;; esac
+fi
+if [ "$1" = new-workspace ]; then
+  if has_fault new-workspace-no-ref; then
+    "$REAL" "$@" >/dev/null 2>&1
+    [ "${FM_SETTLE:-0}" = 1 ] && sleep 1
+    echo OK
+    exit 0
+  fi
+  if [ "${FM_SETTLE:-0}" = 1 ]; then
+    out=$("$REAL" "$@" 2>&1); st=$?
+    sleep 1
+    printf '%s\n' "$out"
+    exit "$st"
+  fi
+fi
+exec "$REAL" "$@"

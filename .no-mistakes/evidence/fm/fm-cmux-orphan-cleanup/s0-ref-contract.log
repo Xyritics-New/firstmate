@@ -1,0 +1,8 @@
+scoped title: fm-firstmate-584feda8-test-refprobe
+new-workspace raw stdout: [OK workspace:285]
+parsed ref: [workspace:285]
+ref -> uuid via 'workspace list --id-format both': []
+FAIL: ref did not resolve to a uuid
+before: workspace:285
+close_created_workspace: removal confirmed
+after: []

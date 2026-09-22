@@ -1,0 +1,12 @@
+throwaway window B: 23582A0E-C298-4D36-859D-16AA6F0B7110
+  contents:
+    workspace:308	Terminal
+partial workspace created in window B: workspace:309
+  window B now holds only the partial workspace:
+    workspace:309	fm-firstmate-584feda8-test-lastin
+
+--- cleanup of a partial workspace that is LAST in its window ---
+  status: 0 (0 = removal confirmed)
+  window B afterwards:
+    workspace:310	Terminal
+  OK: the last-in-window partial workspace really went away, and the window was left with a fresh default workspace

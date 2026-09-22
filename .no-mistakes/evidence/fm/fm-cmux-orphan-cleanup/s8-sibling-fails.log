@@ -1,0 +1,10 @@
+window B holds only the partial workspace workspace:312:
+    workspace:312	fm-firstmate-584feda8-test-nosibling
+
+--- cleanup while cmux refuses to create the throwaway sibling ---
+  status: 1 (non-zero = did not claim a removal)
+  message: error: cmux could not close the partial workspace 'fm-firstmate-584feda8-test-nosibling' (workspace:312); preserving it
+  window B afterwards:
+    workspace:312	fm-firstmate-584feda8-test-nosibling
+  OK: the failed sibling create was reported, not swallowed
+  OK: the workspace is preserved, exactly as the operator was told

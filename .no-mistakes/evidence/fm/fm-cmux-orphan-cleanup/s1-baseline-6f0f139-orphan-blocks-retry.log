@@ -1,0 +1,15 @@
+### adapter under test: bin/backends/cmux-base.sh
+### scoped workspace title: fm-firstmate-584feda8-test-orphan
+### pre-state for that title: []
+
+### ATTEMPT 1 - cmux creates the workspace, the post-create step then fails
+exit status: 1
+message to the operator: error: could not resolve the default surface for cmux workspace 'fm-firstmate-584feda8-test-orphan' (5E4AF7C6-C7BF-4562-8208-3941F24A4192)
+
+### live cmux, every window, workspaces still carrying that title: [workspace:293 5E4AF7C6-C7BF-4562-8208-3941F24A4192]
+
+### ATTEMPT 2 - the retry an operator makes next
+exit status: 1
+result: error: cmux workspace 'fm-firstmate-584feda8-test-orphan' already exists
+OUTCOME: the retry was REFUSED - the failed create left an orphan behind
+### final live state for that title: [workspace:293 5E4AF7C6-C7BF-4562-8208-3941F24A4192]
