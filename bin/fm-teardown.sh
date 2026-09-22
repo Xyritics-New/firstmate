@@ -2272,12 +2272,15 @@ collect_local_firstmate_states() {
 require_exclusive_worktree_slot_record() {
   local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
   local slot state_dir other other_id field other_path other_slot
+  local record_meta_abs other_meta_abs
   slot=$(canonical_existing_dir "$worktree") || return 0
+  record_meta_abs=$(canonical_existing_dir "$(dirname "$record_meta")")/$(basename "$record_meta")
   collect_local_firstmate_states "$record_state" || return 1
   for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
     for other in "$state_dir"/*.meta; do
       [ -f "$other" ] && [ ! -L "$other" ] || continue
-      [ "$other" != "$record_meta" ] || continue
+      other_meta_abs=$(canonical_existing_dir "$(dirname "$other")")/$(basename "$other")
+      [ "$other_meta_abs" != "$record_meta_abs" ] || continue
       other_id=$(basename "$other" .meta)
       for field in worktree home; do
         other_path=$(fm_meta_get "$other" "$field")

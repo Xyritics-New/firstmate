@@ -596,6 +596,25 @@ test_sole_slot_record_still_tears_down() {
   pass "fm-teardown: a task that solely holds its slot still returns it"
 }
 
+test_same_slot_record_spelling_is_not_self_collision() {
+  local dir id=self-spelling alias_dir
+
+  dir=$(make_case self-spelling)
+  case "$dir" in
+    /private/*) alias_dir="/${dir#/private/}" ;;
+    *) fail "test requires a /tmp and /private/tmp spelling alias" ;;
+  esac
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  FM_HOME="$alias_dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id" --force > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "teardown refused its own slot through an aliased home: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "aliased-home teardown left task metadata"
+  pass "fm-teardown: equivalent home spellings do not self-collide"
+}
+
 test_recorded_endpoint_that_changed_directory_still_tears_down() {
   local dir id=moved-task
 
@@ -1385,6 +1404,7 @@ test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
+test_same_slot_record_spelling_is_not_self_collision
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_own_and_absent_slot_claims_still_tear_down
 test_recorded_endpoint_that_changed_directory_still_tears_down
