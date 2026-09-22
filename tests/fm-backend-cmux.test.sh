@@ -79,6 +79,24 @@ cmux_workspace_list_response() {  # <dir> <n> <id1> <title1> [<id2> <title2> ...
   printf '%s' "$json" > "$dir/responses/$n.out"
 }
 
+cmux_workspace_list_ref_response() {  # <dir> <n> <id1> <ref1> <title1> [<id2> <ref2> <title2> ...]
+  local dir=$1 n=$2 json first=1
+  shift 2
+  json='{"workspaces":['
+  while [ $# -ge 3 ]; do
+    [ "$first" -eq 1 ] || json="$json,"
+    json="$json{\"id\":\"$1\",\"ref\":\"$2\",\"title\":\"$3\"}"
+    first=0
+    shift 3
+  done
+  json="$json]}"
+  printf '%s' "$json" > "$dir/responses/$n.out"
+}
+
+cmux_new_workspace_response() {  # <dir> <n> <ref>
+  printf 'OK %s\n' "$3" > "$1/responses/$2.out"
+}
+
 cmux_panes_response() {  # <dir> <n> <surface_id>
   printf '{"panes":[{"selected_surface_id":"%s","surface_ids":["%s"]}]}' "$3" "$3" > "$1/responses/$2.out"
 }
@@ -461,33 +479,34 @@ SH
 
 test_create_task_refuses_duplicate_label() {
   local dir fb out status title
-  dir="$TMP_ROOT/dup-task"; mkdir -p "$dir/responses" "$dir/home/state"
+  dir="$TMP_ROOT/dup-task"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-dup1)
   cmux_workspace_list_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
   fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-dup1 /tmp/proj' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "create_task should refuse an existing workspace title (cmux itself does not enforce uniqueness)"
   assert_contains "$out" "already exists" "create_task did not report the duplicate name"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
-    "create_task closed a same-titled workspace this home holds no pending-create record for"
+    "create_task closed a workspace it did not create, resolved only by its title"
   pass "fm_backend_cmux_create_task: refuses a duplicate workspace title (cmux's own new-workspace has no uniqueness check)"
 }
 
 test_create_task_creates_and_parses_ids() {
   local dir fb out title
-  dir="$TMP_ROOT/create-task"; mkdir -p "$dir/responses" "$dir/home/state"
+  dir="$TMP_ROOT/create-task"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-newtask)
   # 1: workspace list --json (pre-create duplicate check) -> no match
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  # 2: new-workspace (silent on success)
-  # 3: workspace list --json (post-create id resolution) -> match
-  cmux_workspace_list_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111" "$title"
+  # 2: new-workspace -> the ref handle cmux returns for what it just created
+  cmux_new_workspace_response "$dir" 2 "workspace:11"
+  # 3: workspace list --id-format both -> that ref's uuid
+  cmux_workspace_list_ref_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111" "workspace:11" "$title"
   # 4: list-panes --json --id-format uuids -> default surface id
   cmux_panes_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222"
   fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-newtask /tmp/proj' "$ROOT" )
   [ "$out" = "bbbbbbbb-1111-1111-1111-111111111111 cccccccc-2222-2222-2222-222222222222" ] \
     || fail "create_task should echo '<workspace_id> <surface_id>', got '$out'"
@@ -495,177 +514,108 @@ test_create_task_creates_and_parses_ids() {
     "create_task did not call new-workspace with the right name/cwd"
   assert_contains "$(cat "$dir/log")" $'\x1f''--focus'$'\x1f''false' \
     "create_task did not pass --focus false"
-  [ ! -e "$dir/home/state/.cmux-pending-create.fm-newtask" ] \
-    || fail "create_task left a pending-create record behind after a completed create"
-  pass "fm_backend_cmux_create_task: creates a workspace and parses workspace_id/surface_id from list responses"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
+    "a completed create closed something"
+  pass "fm_backend_cmux_create_task: creates a workspace and resolves its uuid from the ref new-workspace returned"
+}
+
+test_create_task_removes_orphan_when_post_create_list_is_stale() {
+  local dir fb out1 out2 status1 status2 title
+  dir="$TMP_ROOT/create-stale-list"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-stale)
+  # Attempt 1: cmux creates the workspace and returns its ref, but `workspace
+  # list` is served a snapshot taken before the workspace was published, so the
+  # uuid cannot be resolved. The ref still names exactly what was created.
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  cmux_new_workspace_response "$dir" 2 "workspace:13"
+  printf '{"workspaces":[]}' > "$dir/responses/3.out"
+  # 4: close-workspace by ref (silent on success)
+  # 5: the post-close re-read confirms it is gone
+  printf '{"workspaces":[]}' > "$dir/responses/5.out"
+  # Attempt 2: nothing was left behind, so the duplicate check is clear and the
+  # task creates normally instead of being refused with 'already exists'.
+  printf '{"workspaces":[]}' > "$dir/responses/6.out"
+  cmux_new_workspace_response "$dir" 7 "workspace:14"
+  cmux_workspace_list_ref_response "$dir" 8 "eeeeeeee-4444-4444-4444-444444444444" "workspace:14" "$title"
+  cmux_panes_response "$dir" 9 "ffffffff-5555-5555-5555-555555555555"
+  fb=$(make_cmux_fakebin "$dir")
+  out1=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-stale /tmp/proj' "$ROOT" 2>&1 )
+  status1=$?
+  [ "$status1" -ne 0 ] || fail "create_task should fail when the post-create list cannot resolve the workspace"
+  assert_contains "$out1" "removed the partial workspace" "create_task did not remove what its own new-workspace returned"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''workspace:13' \
+    "create_task did not close the workspace by the ref new-workspace returned"
+  out2=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-stale /tmp/proj' "$ROOT" 2>"$dir/err2" )
+  status2=$?
+  expect_code 0 "$status2" "the next attempt should create the task, not refuse it with 'already exists'"
+  [ "$out2" = "eeeeeeee-4444-4444-4444-444444444444 ffffffff-5555-5555-5555-555555555555" ] \
+    || fail "the next attempt should echo the fresh '<workspace_id> <surface_id>', got '$out2'"
+  assert_not_contains "$(cat "$dir/err2")" "already exists" "the next attempt was still blocked by an orphan"
+  pass "fm_backend_cmux_create_task: a create whose post-create list is stale leaves no orphan to block the next attempt"
 }
 
 test_create_task_cleans_partial_workspace() {
-  local dir fb out status title wsid
-  dir="$TMP_ROOT/create-partial-cleanup"; mkdir -p "$dir/responses" "$dir/home/state"
+  local dir fb out status title
+  dir="$TMP_ROOT/create-partial-cleanup"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-partial)
-  wsid="dddddddd-3333-3333-3333-333333333333"
-  # 1: duplicate check -> no match
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  # 2: new-workspace succeeds but emits no response
-  # 3: the just-created workspace resolves uniquely
-  cmux_workspace_list_response "$dir" 3 "$wsid" "$title"
+  cmux_new_workspace_response "$dir" 2 "workspace:12"
+  cmux_workspace_list_ref_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "workspace:12" "$title"
   # 4: force the post-create surface lookup to fail
   cmux_panes_empty_response "$dir" 4
-  # 5: cleanup re-check still proves the exact workspace is unique
-  cmux_workspace_list_response "$dir" 5 "$wsid" "$title"
-  # 6: close-workspace (silent on success)
-  # 7: the post-close re-read proves the workspace is really gone
-  printf '{"workspaces":[]}' > "$dir/responses/7.out"
+  # 5: close-workspace by ref (silent on success)
+  # 6: the post-close re-read confirms it is gone
+  printf '{"workspaces":[]}' > "$dir/responses/6.out"
   fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-partial /tmp/proj' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "create_task should fail when the created workspace has no resolvable surface"
   assert_contains "$out" "removed the partial workspace" "create_task did not report cleanup of its own partial workspace"
-  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f'"$wsid" \
-    "create_task did not close the uniquely identified partial workspace"
-  [ ! -e "$dir/home/state/.cmux-pending-create.fm-partial" ] \
-    || fail "create_task kept a pending-create record after confirming the partial workspace was removed"
-  pass "fm_backend_cmux_create_task: cleans its own partial workspace after a post-create failure"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''workspace:12' \
+    "create_task did not close the partial workspace by its returned ref"
+  pass "fm_backend_cmux_create_task: cleans its own partial workspace after a post-create surface failure"
+}
+
+test_create_task_refuses_when_new_workspace_returns_no_handle() {
+  local dir fb out status
+  dir="$TMP_ROOT/create-no-handle"; mkdir -p "$dir/responses"
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  # new-workspace succeeds but names nothing this call could act on.
+  printf 'OK\n' > "$dir/responses/2.out"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-nohandle /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should fail when new-workspace names nothing it created"
+  assert_contains "$out" "returned no workspace handle" "the refusal did not say why nothing could be removed"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
+    "create_task closed a workspace it could not prove it had created"
+  pass "fm_backend_cmux_create_task: refuses and preserves when new-workspace returns no handle to act on"
 }
 
 test_create_task_preserves_partial_workspace_close_reported_but_not_done() {
-  local dir fb out status title wsid
-  dir="$TMP_ROOT/create-partial-close-noop"; mkdir -p "$dir/responses" "$dir/home/state"
+  local dir fb out status title
+  dir="$TMP_ROOT/create-partial-close-noop"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-noop)
-  wsid="dddddddd-7777-7777-7777-777777777777"
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  cmux_workspace_list_response "$dir" 3 "$wsid" "$title"
+  cmux_new_workspace_response "$dir" 2 "workspace:15"
+  cmux_workspace_list_ref_response "$dir" 3 "dddddddd-7777-7777-7777-777777777777" "workspace:15" "$title"
   cmux_panes_empty_response "$dir" 4
-  cmux_workspace_list_response "$dir" 5 "$wsid" "$title"
   # cmux reports OK from close-workspace on the last workspace in a window and
   # leaves it in place (docs/cmux-backend.md); the post-close re-read still
   # sees it, so cleanup must not claim a removal that did not happen.
-  cmux_workspace_list_response "$dir" 7 "$wsid" "$title"
+  cmux_workspace_list_ref_response "$dir" 6 "dddddddd-7777-7777-7777-777777777777" "workspace:15" "$title"
   fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-noop /tmp/proj' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "create_task should fail when the created workspace has no resolvable surface"
-  assert_contains "$out" "left '$title' ($wsid) in place" "cleanup claimed a removal cmux did not perform"
+  assert_contains "$out" "left '$title' (workspace:15) in place" "cleanup claimed a removal cmux did not perform"
   assert_not_contains "$out" "removed the partial workspace" "cleanup reported a removal that never happened"
-  assert_contains "$(cat "$dir/home/state/.cmux-pending-create.fm-noop")" "title=$title" \
-    "create_task dropped the pending-create record for a workspace that is still present"
   pass "fm_backend_cmux_create_task: never reports removal of a partial workspace close-workspace left in place"
-}
-
-test_create_task_recovers_orphan_from_unresolved_create() {
-  local dir fb out1 out2 status1 status2 title orphan fresh sfid record
-  dir="$TMP_ROOT/create-orphan-recovery"; mkdir -p "$dir/responses" "$dir/home/state"
-  title=$(cmux_expected_scoped_title fm-orphan)
-  orphan="11111111-8888-8888-8888-888888888888"
-  fresh="22222222-9999-9999-9999-999999999999"
-  sfid="33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-  record="$dir/home/state/.cmux-pending-create.fm-orphan"
-  # Attempt 1: cmux creates the workspace but serves a snapshot taken before it
-  # was published, so the adapter never learns the id and leaves it behind.
-  printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  printf '{"workspaces":[]}' > "$dir/responses/3.out"
-  # Attempt 2: the snapshot has settled and the orphan is now visible to the
-  # duplicate check (4), the ownership resolution (5), the cleanup re-check (6)
-  # and the post-close confirmation (8), after which the create proceeds.
-  cmux_workspace_list_response "$dir" 4 "$orphan" "$title"
-  cmux_workspace_list_response "$dir" 5 "$orphan" "$title"
-  cmux_workspace_list_response "$dir" 6 "$orphan" "$title"
-  printf '{"workspaces":[]}' > "$dir/responses/8.out"
-  cmux_workspace_list_response "$dir" 10 "$fresh" "$title"
-  cmux_panes_response "$dir" 11 "$sfid"
-  fb=$(make_cmux_fakebin "$dir")
-  out1=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-orphan /tmp/proj' "$ROOT" 2>&1 )
-  status1=$?
-  [ "$status1" -ne 0 ] || fail "create_task should fail when the post-create snapshot cannot identify the workspace"
-  assert_contains "$out1" "ownership is ambiguous" "the unresolved create did not explain why the workspace was preserved"
-  assert_contains "$(cat "$record")" "title=$title" \
-    "the unresolved create left no pending-create record for the workspace it may have created"
-  out2=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-orphan /tmp/proj' "$ROOT" 2>"$dir/err2" )
-  status2=$?
-  expect_code 0 "$status2" "the next create attempt should reclaim its own orphan instead of refusing with 'already exists'"
-  [ "$out2" = "$fresh $sfid" ] || fail "the recovering attempt should echo the fresh '<workspace_id> <surface_id>', got '$out2'"
-  assert_contains "$(cat "$dir/err2")" "reclaimed the cmux workspace" "the recovering attempt did not report what it reclaimed"
-  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f'"$orphan" \
-    "the recovering attempt did not close the orphan its own record identified"
-  [ ! -e "$record" ] || fail "the completed create left its pending-create record behind"
-  pass "fm_backend_cmux_create_task: reclaims the orphan an unresolved create left behind instead of refusing forever"
-}
-
-test_create_task_refuses_recovery_for_bound_workspace() {
-  local dir fb out status title wsid record
-  dir="$TMP_ROOT/create-recovery-bound"; mkdir -p "$dir/responses" "$dir/home/state"
-  title=$(cmux_expected_scoped_title fm-recbound)
-  wsid="44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-  record="$dir/home/state/.cmux-pending-create.fm-recbound"
-  printf 'title=%s\n' "$title" > "$record"
-  printf 'backend=cmux\ncmux_workspace_id=%s\n' "$wsid" > "$dir/home/state/live.meta"
-  cmux_workspace_list_response "$dir" 1 "$wsid" "$title"
-  cmux_workspace_list_response "$dir" 2 "$wsid" "$title"
-  cmux_workspace_list_response "$dir" 3 "$wsid" "$title"
-  fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-recbound /tmp/proj' "$ROOT" 2>&1 )
-  status=$?
-  [ "$status" -ne 0 ] || fail "create_task should refuse when the same-titled workspace is bound to a task in this home"
-  assert_contains "$out" "bound to a task in this home" "the refused reclaim did not explain the live-task binding"
-  assert_contains "$out" "already exists" "the refused reclaim did not fall back to the duplicate refusal"
-  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
-    "a pending-create record was allowed to close a workspace a task record binds"
-  assert_not_contains "$(cat "$dir/log")" $'\x1f''new-workspace' \
-    "create_task created a second workspace after refusing the reclaim"
-  assert_contains "$(cat "$record")" "title=$title" "the refused reclaim discarded the record that attributes the workspace"
-  pass "fm_backend_cmux_create_task: refuses to reclaim a same-titled workspace a task record binds"
-}
-
-test_create_task_refuses_cleanup_for_bound_workspace() {
-  local dir fb out status title wsid
-  dir="$TMP_ROOT/create-bound-refusal"; mkdir -p "$dir/responses" "$dir/home/state"
-  title=$(cmux_expected_scoped_title fm-bound)
-  wsid="eeeeeeee-4444-4444-4444-444444444444"
-  printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  cmux_workspace_list_response "$dir" 3 "$wsid" "$title"
-  cmux_panes_empty_response "$dir" 4
-  cmux_workspace_list_response "$dir" 5 "$wsid" "$title"
-  printf 'backend=cmux\ncmux_workspace_id=%s\n' "$wsid" > "$dir/home/state/live.meta"
-  fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-bound /tmp/proj' "$ROOT" 2>&1 )
-  status=$?
-  [ "$status" -ne 0 ] || fail "create_task should fail when cleanup finds a bound workspace"
-  assert_contains "$out" "bound to a task in this home" "cleanup refusal did not explain the live-task binding"
-  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
-    "cleanup closed a workspace bound to a live task"
-  assert_contains "$(cat "$dir/home/state/.cmux-pending-create.fm-bound")" "title=$title" \
-    "a refused cleanup dropped the record that keeps the preserved workspace attributable"
-  pass "fm_backend_cmux_create_task: refuses cleanup when this home already binds the workspace"
-}
-
-test_create_task_refuses_ambiguous_workspace_ownership() {
-  local dir fb out status title wsid other
-  dir="$TMP_ROOT/create-ambiguous"; mkdir -p "$dir/responses" "$dir/home/state"
-  title=$(cmux_expected_scoped_title fm-ambiguous)
-  wsid="ffffffff-5555-5555-5555-555555555555"
-  other="99999999-6666-6666-6666-666666666666"
-  printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  # A same-title second workspace models a concurrent/other-home ownership
-  # collision. The create path must preserve both rather than guess.
-  cmux_workspace_list_response "$dir" 3 "$wsid" "$title" "$other" "$title"
-  fb=$(make_cmux_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-ambiguous /tmp/proj' "$ROOT" 2>&1 )
-  status=$?
-  [ "$status" -ne 0 ] || fail "create_task should refuse an ambiguous post-create workspace match"
-  assert_contains "$out" "ownership is ambiguous" "ambiguous workspace refusal did not explain the safety boundary"
-  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
-    "cleanup touched a workspace when ownership was ambiguous"
-  assert_contains "$(cat "$dir/home/state/.cmux-pending-create.fm-ambiguous")" "title=$title" \
-    "an ambiguous post-create match dropped the record that keeps the preserved workspaces attributable"
-  pass "fm_backend_cmux_create_task: refuses to clean up an ambiguous same-title workspace"
 }
 
 # --- target_ready / capture ---------------------------------------------------
@@ -1302,12 +1252,10 @@ test_ensure_running_fails_fast_on_denied_without_launching
 test_ensure_running_fails_fast_on_unauth_without_launching
 test_create_task_refuses_duplicate_label
 test_create_task_creates_and_parses_ids
+test_create_task_removes_orphan_when_post_create_list_is_stale
 test_create_task_cleans_partial_workspace
+test_create_task_refuses_when_new_workspace_returns_no_handle
 test_create_task_preserves_partial_workspace_close_reported_but_not_done
-test_create_task_refuses_cleanup_for_bound_workspace
-test_create_task_refuses_ambiguous_workspace_ownership
-test_create_task_recovers_orphan_from_unresolved_create
-test_create_task_refuses_recovery_for_bound_workspace
 test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch
