@@ -597,21 +597,48 @@ test_sole_slot_record_still_tears_down() {
 }
 
 test_same_slot_record_spelling_is_not_self_collision() {
-  local dir id=self-spelling alias_dir
+  local dir id=self-spelling other=neighbour-task rc
 
   dir=$(make_case self-spelling)
-  case "$dir" in
-    /private/*) alias_dir="/${dir#/private/}" ;;
-    *) fail "test requires a /tmp and /private/tmp spelling alias" ;;
-  esac
+  mark_case_as_treehouse_pool "$dir"
+  ln -s home "$dir/home-alias"
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=firstmate:fm-$id" "endpoint_task_id=$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-  FM_HOME="$alias_dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="$dir/home-alias" FM_ROOT_OVERRIDE="$ROOT" \
     FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
     "$TEARDOWN" "$id" --force > "$dir/stdout" 2> "$dir/stderr" \
     || fail "teardown refused its own slot through an aliased home: $(cat "$dir/stderr")"
   assert_absent "$dir/home/state/$id.meta" "aliased-home teardown left task metadata"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "aliased-home teardown did not return its own pool slot: $(cat "$dir/runtime.log")"
+
+  # A genuinely different record on the same slot is still a collision when the
+  # home is reached through the alias; only the record's own spelling is exempt.
+  dir=$(make_case self-spelling-contested)
+  mark_case_as_treehouse_pool "$dir"
+  ln -s home "$dir/home-alias"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$other.meta" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  set +e
+  FM_HOME="$dir/home-alias" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id" --force > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "aliased-home teardown returned a slot a second record still holds"
+  assert_present "$dir/home/state/$id.meta" "aliased-home collision removed the stale record"
+  assert_present "$dir/home/state/$other.meta" "aliased-home collision removed the other record"
+  assert_present "$dir/worktree/sentinel" "aliased-home collision reset the contested slot"
+  [ ! -s "$dir/runtime.log" ] \
+    || fail "aliased-home collision reached the runtime: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "$other" \
+    "aliased-home refusal should name the other task holding the slot"
+
   pass "fm-teardown: equivalent home spellings do not self-collide"
 }
 
