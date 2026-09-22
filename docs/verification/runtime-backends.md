@@ -1746,6 +1746,10 @@ Current active CLI findings:
 | Guarantee | Command shape | Result |
 | --- | --- | --- |
 | Create | `new-workspace --name <title> --cwd <dir> --focus false --id-format uuids` | Created one workspace with one surface without focusing it. |
+| Create response | `new-workspace` under `--json` and `--id-format uuids\|both` | Printed `OK workspace:<n>` and never the UUID under any flag combination. |
+| Create visibility | `workspace list` issued straight after a successful `new-workspace` | Served a pre-create snapshot with no row for the new workspace, so its UUID was unresolvable. |
+| Ref addressing | `close-workspace --workspace workspace:<n>` against that unlisted workspace | Closed it, so the returned ref addresses the workspace before any list can resolve it. |
+| Ref mapping | `workspace list --json --id-format both` | The only response carrying the ref and the UUID together; refs are per-workspace and were not recycled after a workspace closed. |
 | Fresh readiness | `list-panes --workspace <id> --json --id-format uuids` | Found a brand-new surface before content existed. |
 | Fresh read counterexample | `read-screen` before any write | Returned `internal_error: Failed to read terminal text`. |
 | Literal send | `send --workspace <id> --surface <id> -- <text>` | Left text unsubmitted. |
@@ -1757,6 +1761,10 @@ Current active CLI findings:
 The last-workspace workaround was reverified on 2026-07-10 in Automation mode.
 After creating one unfocused unnamed sibling in the same window, `close-workspace` removed the exact task workspace and left only cmux's default sibling.
 A selected non-last workspace closed directly, proving that window cardinality rather than selection is the trigger.
+
+The create-response and create-visibility findings above are together why a failed create is cleaned up by the ref `new-workspace` returned rather than by resolving its title or UUID: the ref is the only handle the call gets, and it closes a workspace the list cannot yet see.
+The same last-workspace evidence applies to that cleanup, so it closes through the one window-aware path and then reconfirms removal, because `close-workspace` returning success is not proof the workspace went away.
+[`cmux-backend.md`](../cmux-backend.md#cleaning-up-a-failed-create) owns the resulting current behavior.
 
 Source inspection confirmed each workspace constructor creates a new UUID with no restored-id input.
 Recovery therefore remains title-based.

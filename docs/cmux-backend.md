@@ -68,8 +68,8 @@ The spawn refusal explains how to finish cmux setup or opt back into tmux.
 Each task owns one cmux workspace with one surface.
 The caller-facing label remains `fm-<id>`, while the visible workspace title is `fm-<home-label>-<id>`.
 The home label is `firstmate` or `2ndmate-<id>` plus a stable short hash of the resolved Firstmate root.
-cmux does not enforce title uniqueness, so the duplicate check, recovery, and list paths all validate this scoped title.
-Cleanup does not: it acts only on the handle `new-workspace` returned, never on a title match.
+cmux does not enforce title uniqueness, so the duplicate check, recovery, list, and teardown paths all validate this scoped title.
+The create path's cleanup of its own partial workspace is the one exception: it acts only on the handle `new-workspace` returned, never on a title match.
 Relocating the Firstmate installation changes the hash and leaves old titles unmatched, consistent with recorded worktree paths also becoming stale.
 
 ```text
@@ -84,13 +84,14 @@ Workspace UUIDs are not stable across an app relaunch, so recovery searches by t
 
 ### Cleaning up a failed create
 
-`new-workspace` prints `OK workspace:<n>` and nothing else: neither `--json` nor `--id-format uuids|both` makes it return the UUID, verified live against 0.64.x.
+`new-workspace` prints `OK workspace:<n>` and nothing else: no flag combination makes it return the UUID.
 That ref is a per-workspace handle, it is not recycled when a workspace closes, and `workspace list --id-format both` maps it to the UUID the rest of the adapter addresses.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#cmux) owns the live evidence for both facts.
 
 The ref is the create path's only ownership proof, because it is the handle cmux itself returned for the workspace this call just created.
 Every post-create failure closes that exact ref, and `close-workspace` accepts a ref directly, so the workspace is removed without the list having to resolve it and without matching on a title, label, or list position.
 This matters because `workspace list` is not read-your-writes against `new-workspace`: a list issued straight after a successful create can be served a snapshot taken before the new workspace was published, and the UUID is then unresolvable while the ref still closes the workspace.
-A failed create therefore leaves nothing behind for the next attempt's duplicate check to refuse.
+A failed create that removed its workspace therefore leaves nothing behind for the next attempt's duplicate check to refuse; the cases below are the ones that still can, and each says so on the error stream.
 
 A `new-workspace` that returns no ref is the one case this call can attribute nothing to itself: it refuses and preserves whatever exists rather than guessing at a target.
 Cleanup closes through the same window-aware path teardown uses, so a partial workspace that is last in its window gets the throwaway sibling that makes `close-workspace` effective, and a sibling cmux refuses to create is reported rather than closing into the documented no-op.
@@ -139,6 +140,7 @@ Real tests share the captain's running app rather than creating an isolated cmux
 - The only-workspace cleanup path leaves a fresh default workspace and cannot close the window.
 - Label lookup and recovery are currently scoped to the current cmux window, so a task moved to a non-current window is a known recovery blind spot.
 - Workspace ids do not survive app relaunch and are never recovery authority.
+- A failed create can still leave a workspace behind when cmux returns no handle for it or its removal cannot be confirmed; both are reported rather than guessed at, and clearing that workspace is manual.
 
 ## Regression entry points
 
