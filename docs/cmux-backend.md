@@ -93,8 +93,9 @@ This matters because `workspace list` is not read-your-writes against `new-works
 A failed create therefore leaves nothing behind for the next attempt's duplicate check to refuse.
 
 A `new-workspace` that returns no ref is the one case this call can attribute nothing to itself: it refuses and preserves whatever exists rather than guessing at a target.
-Cleanup closes through the same window-aware path teardown uses, so a partial workspace that is last in its window gets the throwaway sibling that makes `close-workspace` effective.
-Removal is then confirmed by re-reading the list for that ref: a workspace still present, or a list that cannot be read at all, is reported as preserved rather than removed.
+Cleanup closes through the same window-aware path teardown uses, so a partial workspace that is last in its window gets the throwaway sibling that makes `close-workspace` effective, and a sibling cmux refuses to create is reported rather than closing into the documented no-op.
+Removal is then confirmed by re-walking every window for that ref, because a plain `workspace list` answers for the current window alone and would read a workspace stranded in another window as removed.
+A window still holding the ref, and a window enumeration that cannot be completed, are both reported as preserved rather than removed.
 
 ## Current operation and safety
 

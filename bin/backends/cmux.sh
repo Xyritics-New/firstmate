@@ -371,26 +371,24 @@ fm_backend_cmux_workspace_id_for_ref() {  # <ref>
 # Closing goes through the shared window-aware boundary, because a partial
 # workspace can be the last one in its window too - the user closing the other
 # workspace mid-create is enough - and cmux answers `OK` to that close without
-# removing anything. Success is therefore reported only after re-reading the
-# list and finding the ref gone; an unreadable list confirms nothing and
+# removing anything. Success is therefore reported only after
+# fm_backend_cmux_window_of_workspace re-walks EVERY window and finds no window
+# holding the ref: a plain `workspace list` answers for the current window
+# alone, so it cannot tell a removal from a workspace left behind in another
+# window. An enumeration that could not be completed confirms nothing and
 # preserves the workspace rather than claiming a removal that may not have
 # happened.
 fm_backend_cmux_close_created_workspace() {  # <ref> <title>
-  local ref=$1 title=$2 remaining
+  local ref=$1 title=$2 still_in
   fm_backend_cmux_close_workspace_window_aware "$ref" || {
     echo "error: cmux could not close the partial workspace '$title' ($ref); preserving it" >&2
     return 1
   }
-  remaining=$(fm_backend_cmux_cli workspace list --json --id-format both 2>/dev/null \
-    | jq -er --arg ref "$ref" '
-      (.workspaces // null) as $workspaces
-      | select(($workspaces | type) == "array")
-      | [$workspaces[]? | select(.ref == $ref)] | length
-    ' 2>/dev/null) || {
+  still_in=$(fm_backend_cmux_window_of_workspace "$ref") || {
     echo "error: cmux could not confirm removal of the partial workspace '$title' ($ref); preserving it" >&2
     return 1
   }
-  if [ "$remaining" != 0 ]; then
+  if [ -n "$still_in" ]; then
     echo "error: cmux close-workspace left '$title' ($ref) in place; preserving it" >&2
     return 1
   fi
@@ -658,7 +656,7 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
 }
 
 # fm_backend_cmux_window_of_workspace: echo "<window_id> <workspace_count>" for
-# the window that contains <workspace>, or nothing if it is not found live.
+# the window that contains <workspace>, or nothing if no window holds it.
 # <workspace> is either handle cmux hands out for the same object - the uuid
 # teardown carries in task metadata, or the ref new-workspace returns - so the
 # scoped lists are read with --id-format both and matched on either.
@@ -666,20 +664,29 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
 # only (verified live), so the containing window is found by walking every
 # window from `list-windows --json` and asking each for its own scoped list.
 # The count comes from the same scoped workspace list that confirms membership.
+#
+# Empty output means "no window holds it", which is also how cleanup proves a
+# removal, so it is only ever reported after the walk completed: an unreadable
+# window list, an unreadable or unparseable per-window list, and an app that
+# reports no windows at all all return non-zero instead, leaving the caller to
+# treat the workspace's whereabouts as unknown.
 fm_backend_cmux_window_of_workspace() {  # <workspace> -> "<window_id> <count>"
-  local wsid=$1 wins wid wss count
-  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 0
+  local wsid=$1 wins wids wid wss count incomplete=0
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  wids=$(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+  [ -n "$wids" ] || return 1
   while IFS= read -r wid; do
     [ -n "$wid" ] || continue
-    wss=$(fm_backend_cmux_cli workspace list --json --id-format both --window "$wid" 2>/dev/null) || continue
-    count=$(printf '%s' "$wss" | jq -er --arg id "$wsid" '
-      (.workspaces // []) as $workspaces
-      | select(any($workspaces[]?; .id == $id or .ref == $id))
-      | ($workspaces | length)
-    ' 2>/dev/null) || continue
-    printf '%s %s' "$wid" "$count"
-    return 0
-  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format both --window "$wid" 2>/dev/null) || { incomplete=1; continue; }
+    count=$(printf '%s' "$wss" | jq -er '(.workspaces // null) | select(type == "array") | length' 2>/dev/null) \
+      || { incomplete=1; continue; }
+    if printf '%s' "$wss" | jq -e --arg id "$wsid" 'any(.workspaces[]?; .id == $id or .ref == $id)' >/dev/null 2>&1; then
+      printf '%s %s' "$wid" "$count"
+      return 0
+    fi
+  done <<< "$wids"
+  [ "$incomplete" = 0 ] || return 1
+  return 0
 }
 
 # fm_backend_cmux_close_workspace_window_aware: the ONE way this adapter closes
@@ -699,15 +706,17 @@ fm_backend_cmux_window_of_workspace() {  # <workspace> -> "<window_id> <count>"
 # leaving that window a fresh default workspace (never an fm-<home>- title, so
 # recovery/list_live ignore it) - cmux's own "closed the last tab" outcome.
 #
-# Returns close-workspace's own status, which is NOT proof the workspace went
-# away; callers that report a removal confirm it themselves.
+# A sibling that cannot be created leaves the documented no-op close as the only
+# remaining move, so its failure is reported rather than swallowed. Otherwise
+# this returns close-workspace's own status, which is NOT proof the workspace
+# went away; callers that report a removal confirm it themselves.
 fm_backend_cmux_close_workspace_window_aware() {  # <workspace>
   local target=$1 wininfo win count
-  wininfo=$(fm_backend_cmux_window_of_workspace "$target")
+  wininfo=$(fm_backend_cmux_window_of_workspace "$target") || wininfo=
   win=${wininfo%% *}
   count=${wininfo##* }
   if [ -n "$win" ] && [ "$count" = 1 ]; then
-    fm_backend_cmux_cli new-workspace --window "$win" --focus false --id-format uuids >/dev/null 2>&1 || true
+    fm_backend_cmux_cli new-workspace --window "$win" --focus false --id-format uuids >/dev/null 2>&1 || return 1
   fi
   fm_backend_cmux_cli close-workspace --workspace "$target" >/dev/null 2>&1
 }

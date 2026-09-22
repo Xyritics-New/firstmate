@@ -520,26 +520,29 @@ test_create_task_creates_and_parses_ids() {
 }
 
 test_create_task_removes_orphan_when_post_create_list_is_stale() {
-  local dir fb out1 out2 status1 status2 title
+  local dir fb out1 out2 status1 status2 title win
   dir="$TMP_ROOT/create-stale-list"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-stale)
+  win="e1111111-0000-0000-0000-000000000000"
   # Attempt 1: cmux creates the workspace and returns its ref, but `workspace
   # list` is served a snapshot taken before the workspace was published, so the
   # uuid cannot be resolved. The ref still names exactly what was created.
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
   cmux_new_workspace_response "$dir" 2 "workspace:13"
   printf '{"workspaces":[]}' > "$dir/responses/3.out"
-  # 4: list-windows (window-aware close) -> the stale app shows no windows
-  printf '[]' > "$dir/responses/4.out"
-  # 5: close-workspace by ref (silent on success)
-  # 6: the post-close re-read confirms the ref is gone
-  printf '{"workspaces":[]}' > "$dir/responses/6.out"
+  # 4-5: the window walk does not see it either, so no sibling is needed
+  cmux_windows_response "$dir" 4 "$win" 1
+  cmux_workspace_list_ref_response "$dir" 5 "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
+  # 6: close-workspace by ref (silent on success)
+  # 7-8: the post-close walk finds no window holding the ref
+  cmux_windows_response "$dir" 7 "$win" 1
+  cmux_workspace_list_ref_response "$dir" 8 "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
   # Attempt 2: nothing was left behind, so the duplicate check is clear and the
   # task creates normally instead of being refused with 'already exists'.
-  printf '{"workspaces":[]}' > "$dir/responses/7.out"
-  cmux_new_workspace_response "$dir" 8 "workspace:14"
-  cmux_workspace_list_ref_response "$dir" 9 "eeeeeeee-4444-4444-4444-444444444444" "workspace:14" "$title"
-  cmux_panes_response "$dir" 10 "ffffffff-5555-5555-5555-555555555555"
+  printf '{"workspaces":[]}' > "$dir/responses/9.out"
+  cmux_new_workspace_response "$dir" 10 "workspace:14"
+  cmux_workspace_list_ref_response "$dir" 11 "eeeeeeee-4444-4444-4444-444444444444" "workspace:14" "$title"
+  cmux_panes_response "$dir" 12 "ffffffff-5555-5555-5555-555555555555"
   fb=$(make_cmux_fakebin "$dir")
   out1=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-stale /tmp/proj' "$ROOT" 2>&1 )
@@ -559,19 +562,23 @@ test_create_task_removes_orphan_when_post_create_list_is_stale() {
 }
 
 test_create_task_cleans_partial_workspace() {
-  local dir fb out status title
+  local dir fb out status title win
   dir="$TMP_ROOT/create-partial-cleanup"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-partial)
+  win="e1111111-0000-0000-0000-000000000000"
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
   cmux_new_workspace_response "$dir" 2 "workspace:12"
   cmux_workspace_list_ref_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "workspace:12" "$title"
   # 4: force the post-create surface lookup to fail
   cmux_panes_empty_response "$dir" 4
-  # 5: list-windows -> no window claims it, so no sibling is needed
-  printf '[]' > "$dir/responses/5.out"
-  # 6: close-workspace by ref (silent on success)
-  # 7: the post-close re-read confirms the ref is gone
-  printf '{"workspaces":[]}' > "$dir/responses/7.out"
+  # 5-6: the partial workspace shares its window, so no sibling is needed
+  cmux_windows_response "$dir" 5 "$win" 2
+  cmux_workspace_list_ref_response "$dir" 6 "dddddddd-3333-3333-3333-333333333333" "workspace:12" "$title" \
+    "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
+  # 7: close-workspace by ref (silent on success)
+  # 8-9: the post-close walk finds no window holding the ref
+  cmux_windows_response "$dir" 8 "$win" 1
+  cmux_workspace_list_ref_response "$dir" 9 "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-partial /tmp/proj' "$ROOT" 2>&1 )
@@ -600,8 +607,9 @@ test_create_task_adds_sibling_when_partial_workspace_is_last_in_window() {
   # close-workspace alone would be the documented silent no-op
   cmux_workspace_list_ref_response "$dir" 6 "cccccccc-6666-6666-6666-666666666666" "workspace:16" "$title"
   # 7: the throwaway sibling (silent), 8: close-workspace (silent)
-  # 9: the post-close re-read confirms the ref is gone
-  printf '{"workspaces":[]}' > "$dir/responses/9.out"
+  # 9-10: the post-close walk finds the window holding only that sibling
+  cmux_windows_response "$dir" 9 "$win" 1
+  cmux_workspace_list_ref_response "$dir" 10 "ffffffff-0000-0000-0000-000000000000" "workspace:20" ""
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-lastin /tmp/proj' "$ROOT" 2>&1 )
@@ -633,18 +641,23 @@ test_create_task_refuses_when_new_workspace_returns_no_handle() {
 }
 
 test_create_task_preserves_partial_workspace_close_reported_but_not_done() {
-  local dir fb out status title
+  local dir fb out status title win
   dir="$TMP_ROOT/create-partial-close-noop"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-noop)
+  win="e1111111-0000-0000-0000-000000000000"
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
   cmux_new_workspace_response "$dir" 2 "workspace:15"
   cmux_workspace_list_ref_response "$dir" 3 "dddddddd-7777-7777-7777-777777777777" "workspace:15" "$title"
   cmux_panes_empty_response "$dir" 4
-  printf '[]' > "$dir/responses/5.out"
+  cmux_windows_response "$dir" 5 "$win" 2
+  cmux_workspace_list_ref_response "$dir" 6 "dddddddd-7777-7777-7777-777777777777" "workspace:15" "$title" \
+    "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
   # cmux reports OK from close-workspace and leaves the workspace in place
-  # (docs/cmux-backend.md); the post-close re-read still sees the ref, so
+  # (docs/cmux-backend.md); the post-close walk still finds the ref, so
   # cleanup must not claim a removal that did not happen.
-  cmux_workspace_list_ref_response "$dir" 7 "dddddddd-7777-7777-7777-777777777777" "workspace:15" "$title"
+  cmux_windows_response "$dir" 8 "$win" 2
+  cmux_workspace_list_ref_response "$dir" 9 "dddddddd-7777-7777-7777-777777777777" "workspace:15" "$title" \
+    "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-noop /tmp/proj' "$ROOT" 2>&1 )
@@ -656,17 +669,20 @@ test_create_task_preserves_partial_workspace_close_reported_but_not_done() {
 }
 
 test_create_task_preserves_partial_workspace_when_removal_is_unconfirmable() {
-  local dir fb out status title
+  local dir fb out status title win
   dir="$TMP_ROOT/create-partial-unconfirmable"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-unconfirmed)
+  win="e1111111-0000-0000-0000-000000000000"
   printf '{"workspaces":[]}' > "$dir/responses/1.out"
   cmux_new_workspace_response "$dir" 2 "workspace:17"
   cmux_workspace_list_ref_response "$dir" 3 "dddddddd-8888-8888-8888-888888888888" "workspace:17" "$title"
   cmux_panes_empty_response "$dir" 4
-  printf '[]' > "$dir/responses/5.out"
-  # 6: close-workspace answers OK, but the confirming read fails outright, so
-  # nothing establishes that the workspace went away.
-  printf '1' > "$dir/responses/7.exit"
+  cmux_windows_response "$dir" 5 "$win" 2
+  cmux_workspace_list_ref_response "$dir" 6 "dddddddd-8888-8888-8888-888888888888" "workspace:17" "$title" \
+    "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
+  # 7: close-workspace answers OK, but the confirming walk cannot read the
+  # window list at all, so nothing establishes that the workspace went away.
+  printf '1' > "$dir/responses/8.exit"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-unconfirmed /tmp/proj' "$ROOT" 2>&1 )
@@ -675,6 +691,74 @@ test_create_task_preserves_partial_workspace_when_removal_is_unconfirmable() {
   assert_contains "$out" "could not confirm removal" "cleanup did not say that removal was unproven"
   assert_not_contains "$out" "removed the partial workspace" "cleanup claimed a removal it could not confirm"
   pass "fm_backend_cmux_create_task: preserves the partial workspace when removal cannot be confirmed"
+}
+
+# The partial workspace can sit in a window the user is not looking at, and a
+# plain `workspace list` answers for the CURRENT window only: reading absence
+# from it reports a removal for a workspace that is still sitting in window A
+# while the user focuses window B, and the next attempt stays blocked.
+test_create_task_preserves_partial_workspace_left_in_another_window() {
+  local dir fb out status title win_a win_b scan_a
+  dir="$TMP_ROOT/create-partial-other-window"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-otherwin)
+  win_a="e1111111-0000-0000-0000-000000000000"
+  win_b="e2222222-0000-0000-0000-000000000000"
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  cmux_new_workspace_response "$dir" 2 "workspace:21"
+  cmux_workspace_list_ref_response "$dir" 3 "dddddddd-9999-9999-9999-999999999999" "workspace:21" "$title"
+  cmux_panes_empty_response "$dir" 4
+  # 5-7: the partial workspace lives in window A while window B is current, and
+  # it shares A with another workspace, so no sibling is needed.
+  cmux_windows_response "$dir" 5 "$win_b" 1 "$win_a" 2
+  cmux_workspace_list_ref_response "$dir" 6 "aaaaaaaa-0000-0000-0000-000000000000" "workspace:8" "elsewhere"
+  cmux_workspace_list_ref_response "$dir" 7 "dddddddd-9999-9999-9999-999999999999" "workspace:21" "$title" \
+    "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
+  # 8: close-workspace answers OK and removes nothing.
+  # 9-11: window B, which is what an unscoped list would answer for, no longer
+  # mentions the ref - but window A still holds it.
+  cmux_windows_response "$dir" 9 "$win_b" 1 "$win_a" 2
+  cmux_workspace_list_ref_response "$dir" 10 "aaaaaaaa-0000-0000-0000-000000000000" "workspace:8" "elsewhere"
+  cmux_workspace_list_ref_response "$dir" 11 "dddddddd-9999-9999-9999-999999999999" "workspace:21" "$title" \
+    "ffffffff-0000-0000-0000-000000000000" "workspace:9" "other"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-otherwin /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should fail when the created workspace has no resolvable surface"
+  assert_contains "$out" "left '$title' (workspace:21) in place" \
+    "cleanup reported a removal for a workspace still sitting in a non-current window"
+  assert_not_contains "$out" "removed the partial workspace" "cleanup claimed a removal that did not happen"
+  scan_a=$(grep -acF -- $'\x1f''workspace'$'\x1f''list'$'\x1f''--json'$'\x1f''--id-format'$'\x1f''both'$'\x1f''--window'$'\x1f'"$win_a" "$dir/log")
+  [ "$scan_a" -ge 2 ] \
+    || fail "the removal check must re-read the workspace's own window, not just the current one (scanned it $scan_a time(s))"
+  pass "fm_backend_cmux_create_task: never reports removal of a partial workspace left behind in another window"
+}
+
+# The throwaway sibling is what makes the last-in-window close work at all, so a
+# sibling cmux refuses to create leaves the close as the documented no-op: that
+# has to be reported, never closed into and called a removal.
+test_create_task_preserves_partial_workspace_when_sibling_create_fails() {
+  local dir fb out status title win
+  dir="$TMP_ROOT/create-partial-sibling-fails"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-nosibling)
+  win="e1111111-0000-0000-0000-000000000000"
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  cmux_new_workspace_response "$dir" 2 "workspace:22"
+  cmux_workspace_list_ref_response "$dir" 3 "dddddddd-2222-2222-2222-222222222222" "workspace:22" "$title"
+  cmux_panes_empty_response "$dir" 4
+  # 5-6: the partial workspace is the only one in its window, so the close needs
+  # a throwaway sibling first - and 7, that sibling create, fails.
+  cmux_windows_response "$dir" 5 "$win" 1
+  cmux_workspace_list_ref_response "$dir" 6 "dddddddd-2222-2222-2222-222222222222" "workspace:22" "$title"
+  printf '1' > "$dir/responses/7.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-nosibling /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should fail when the created workspace has no resolvable surface"
+  assert_contains "$out" "could not close the partial workspace" "cleanup hid the failed sibling create"
+  assert_not_contains "$out" "removed the partial workspace" "cleanup claimed a removal the failed sibling made impossible"
+  pass "fm_backend_cmux_create_task: reports the partial workspace as preserved when the sibling its close needs cannot be created"
 }
 
 # --- target_ready / capture ---------------------------------------------------
@@ -1142,15 +1226,35 @@ test_window_of_workspace_finds_window_and_count() {
 }
 
 test_window_of_workspace_empty_when_not_found() {
-  local dir fb out
+  local dir fb out status
   dir="$TMP_ROOT/win-of-ws-none"; mkdir -p "$dir/responses"
   cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
   cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT" )
+  status=$?
+  expect_code 0 "$status" "a completed walk that found no holder is an answer, not a failure"
   [ -z "$out" ] || fail "window_of_workspace should echo nothing when the workspace is not found, got '$out'"
   pass "fm_backend_cmux_window_of_workspace: echoes nothing when no window holds the workspace"
+}
+
+# "No window holds it" is also how cleanup proves a removal, so a walk that
+# could not read every window must not answer it.
+test_window_of_workspace_fails_when_a_window_cannot_be_read() {
+  local dir fb out status
+  dir="$TMP_ROOT/win-of-ws-unreadable"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1 "e2222222-0000-0000-0000-000000000000" 1
+  # 2: the first window's workspace list cannot be read at all
+  printf '1' > "$dir/responses/2.exit"
+  cmux_workspace_list_response "$dir" 3 "ffffffff-0000-0000-0000-000000000000" "other"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT" )
+  status=$?
+  [ "$status" -ne 0 ] || fail "window_of_workspace must not report 'nowhere' from a walk it could not complete"
+  [ -z "$out" ] || fail "window_of_workspace should echo nothing when the walk is incomplete, got '$out'"
+  pass "fm_backend_cmux_window_of_workspace: fails instead of answering when a window's workspace list is unreadable"
 }
 
 # --- kill: close the task workspace, adding a sibling when it is the last one -
@@ -1317,6 +1421,8 @@ test_create_task_adds_sibling_when_partial_workspace_is_last_in_window
 test_create_task_refuses_when_new_workspace_returns_no_handle
 test_create_task_preserves_partial_workspace_close_reported_but_not_done
 test_create_task_preserves_partial_workspace_when_removal_is_unconfirmable
+test_create_task_preserves_partial_workspace_left_in_another_window
+test_create_task_preserves_partial_workspace_when_sibling_create_fails
 test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch
@@ -1345,6 +1451,7 @@ test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed_when_target_absent
 test_window_of_workspace_finds_window_and_count
 test_window_of_workspace_empty_when_not_found
+test_window_of_workspace_fails_when_a_window_cannot_be_read
 test_kill_closes_workspace_directly_when_not_last
 test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails
