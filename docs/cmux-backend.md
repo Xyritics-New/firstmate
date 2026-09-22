@@ -88,12 +88,13 @@ Workspace UUIDs are not stable across an app relaunch, so recovery searches by t
 That ref is a per-workspace handle, it is not recycled when a workspace closes, and `workspace list --id-format both` maps it to the UUID the rest of the adapter addresses.
 
 The ref is the create path's only ownership proof, because it is the handle cmux itself returned for the workspace this call just created.
-Every post-create failure closes that exact ref, and `close-workspace` accepts a ref directly, so cleanup needs no `workspace list` read and never matches on a title, label, or list position.
+Every post-create failure closes that exact ref, and `close-workspace` accepts a ref directly, so the workspace is removed without the list having to resolve it and without matching on a title, label, or list position.
 This matters because `workspace list` is not read-your-writes against `new-workspace`: a list issued straight after a successful create can be served a snapshot taken before the new workspace was published, and the UUID is then unresolvable while the ref still closes the workspace.
 A failed create therefore leaves nothing behind for the next attempt's duplicate check to refuse.
 
 A `new-workspace` that returns no ref is the one case this call can attribute nothing to itself: it refuses and preserves whatever exists rather than guessing at a target.
-Removal is confirmed by re-reading the list for that ref, so the documented `close-workspace` no-op on the last workspace in a window is reported as a preserved workspace rather than a removal.
+Cleanup closes through the same window-aware path teardown uses, so a partial workspace that is last in its window gets the throwaway sibling that makes `close-workspace` effective.
+Removal is then confirmed by re-reading the list for that ref: a workspace still present, or a list that cannot be read at all, is reported as preserved rather than removed.
 
 ## Current operation and safety
 
@@ -120,6 +121,7 @@ When the task is last in its window, Firstmate creates one unfocused unnamed sib
 The sibling never carries an `fm-` title and is ignored by recovery.
 
 The exact window membership is re-read before this operation.
+Teardown and the create path's cleanup of its own partial workspace share this one close, so a partial workspace that is last in its window is removed rather than silently kept, and membership is matched on either handle because cleanup holds only the ref.
 A selected workspace that is not last closes normally; selection itself is not the trigger.
 Firstmate does not attempt to close the macOS window because cmux's socket cannot close a window holding a live terminal.
 
