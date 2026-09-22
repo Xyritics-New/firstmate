@@ -360,13 +360,23 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
     | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
 }
 
+# fm_backend_cmux_state_dir: this home's task-record directory, resolved the
+# same way every fm-*.sh entry point resolves its own STATE. The binding scan
+# and the pending-create record below must agree on it: a record written
+# somewhere the scan does not read would let cleanup act on a workspace a task
+# already owns.
+fm_backend_cmux_state_dir() {
+  printf '%s' "${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+}
+
 # fm_backend_cmux_workspace_bound_in_home: conservatively report whether any
 # task metadata in this home names <workspace_id>. Temporary metadata files are
 # included because publication is the binding boundary, and an ambiguous or
 # interrupted publication must never turn into permission to close a workspace.
 fm_backend_cmux_workspace_bound_in_home() {  # <workspace_id>
-  local wsid=$1 meta
-  for meta in "$FM_HOME"/state/*.meta "$FM_HOME"/state/.*.meta.*; do
+  local wsid=$1 meta state
+  state=$(fm_backend_cmux_state_dir)
+  for meta in "$state"/*.meta "$state"/.*.meta.*; do
     [ -f "$meta" ] && [ ! -L "$meta" ] || continue
     if awk -F= -v wsid="$wsid" '
       ($1 == "cmux_workspace_id" && $2 == wsid) ||
@@ -379,13 +389,16 @@ fm_backend_cmux_workspace_bound_in_home() {  # <workspace_id>
   return 1
 }
 
-# fm_backend_cmux_cleanup_created_workspace: close one workspace created by
-# this create attempt, but only after re-reading cmux and proving that its title
-# and id are each unique and that this home has not bound the workspace in any
-# task record. Any uncertainty refuses cleanup and leaves the workspace for
-# explicit recovery; the helper never searches or mutates another home.
+# fm_backend_cmux_cleanup_created_workspace: close one workspace a create
+# attempt in this home left behind, but only after re-reading cmux and proving
+# that its title and id are each unique and that this home has not bound the
+# workspace in any task record, and only reporting success once a further
+# re-read shows it actually gone (close-workspace reports OK on the last
+# workspace in a window and leaves it in place). Any uncertainty refuses cleanup
+# and preserves the workspace; the helper never searches or mutates another
+# home.
 fm_backend_cmux_cleanup_created_workspace() {  # <workspace_id> <title>
-  local wsid=$1 title=$2 counts title_count id_count
+  local wsid=$1 title=$2 counts title_count id_count remaining
   counts=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
     | jq -er --arg wsid "$wsid" --arg title "$title" '
       (.workspaces // null) as $workspaces
@@ -412,6 +425,79 @@ fm_backend_cmux_cleanup_created_workspace() {  # <workspace_id> <title>
     echo "error: cmux partial workspace cleanup failed for '$title' ($wsid); preserving it" >&2
     return 1
   }
+  remaining=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
+    | jq -er --arg wsid "$wsid" '
+      (.workspaces // null) as $workspaces
+      | select(($workspaces | type) == "array")
+      | [$workspaces[]? | select(.id == $wsid)] | length
+    ' 2>/dev/null) || {
+    echo "error: cmux partial workspace cleanup for '$title' ($wsid) could not be confirmed; treating it as still present" >&2
+    return 1
+  }
+  if [ "$remaining" != 0 ]; then
+    echo "error: cmux close-workspace left '$title' ($wsid) in place; preserving it" >&2
+    return 1
+  fi
+  return 0
+}
+
+# fm_backend_cmux_pending_create_path: this home's record of an in-flight
+# create for <label>, one file per task label inside this home's own state
+# directory. Never resolved against, read from, or written into another home.
+fm_backend_cmux_pending_create_path() {  # <label>
+  local label=$1
+  printf '%s/.cmux-pending-create.%s' "$(fm_backend_cmux_state_dir)" "$label"
+}
+
+# fm_backend_cmux_record_pending_create: record, BEFORE new-workspace runs,
+# that this home is creating <title> for <label>. cmux's new-workspace returns
+# no id at all (docs/verification/runtime-backends.md), and its workspace list
+# is not read-your-writes against it, so a create can succeed while this
+# adapter never learns the id - leaving a workspace only this record can later
+# attribute. An unwritable record fails the create outright: a workspace this
+# home could not prove it owns is a workspace it could never reclaim.
+fm_backend_cmux_record_pending_create() {  # <label> <title>
+  local label=$1 title=$2 record
+  record=$(fm_backend_cmux_pending_create_path "$label")
+  mkdir -p "${record%/*}" 2>/dev/null || true
+  printf 'title=%s\n' "$title" 2>/dev/null >"$record" || {
+    echo "error: cmux could not record the pending create for '$title' at $record; refusing to create a workspace this home could not later reclaim" >&2
+    return 1
+  }
+  return 0
+}
+
+fm_backend_cmux_clear_pending_create() {  # <label>
+  local label=$1
+  rm -f "$(fm_backend_cmux_pending_create_path "$label")" 2>/dev/null || true
+}
+
+# fm_backend_cmux_recover_orphaned_create: reclaim the workspace a previous
+# create attempt in THIS home left behind for <label>, so an unfinished create
+# stops blocking the task's duplicate check forever. Ownership is resolved from
+# this home's own pending-create record, never from the title alone: with no
+# record naming exactly <title>, the live workspace belongs to a task and is
+# left untouched, and fm_backend_cmux_cleanup_created_workspace still has to
+# prove uniqueness and the absence of any task binding before anything closes.
+# One create attempt reclaims at most once - this runs on the single duplicate
+# check, never in a loop - and the record survives a refused reclaim so the
+# workspace stays attributable instead of becoming an orphan again.
+fm_backend_cmux_recover_orphaned_create() {  # <label> <title>
+  local label=$1 title=$2 record recorded wsid
+  record=$(fm_backend_cmux_pending_create_path "$label")
+  [ -f "$record" ] && [ ! -L "$record" ] || return 1
+  recorded=$(sed -n 's/^title=//p' "$record" 2>/dev/null | head -1)
+  if [ "$recorded" != "$title" ]; then
+    fm_backend_cmux_clear_pending_create "$label"
+    return 1
+  fi
+  wsid=$(fm_backend_cmux_workspace_id_unique_for_label "$title") || {
+    echo "error: cmux workspace '$title' is left over from an unfinished create in this home but does not resolve to a single live workspace; preserving it" >&2
+    return 1
+  }
+  fm_backend_cmux_cleanup_created_workspace "$wsid" "$title" || return 1
+  fm_backend_cmux_clear_pending_create "$label"
+  echo "notice: reclaimed the cmux workspace '$title' ($wsid) left behind by an unfinished create in this home" >&2
   return 0
 }
 
@@ -424,29 +510,41 @@ fm_backend_cmux_cleanup_created_workspace() {  # <workspace_id> <title>
 # workspace/surface/pane create all default focus to false) - no
 # focus-restore dance is needed, unlike zellij. Echoes "<workspace_id>
 # <surface_id>" on success.
+#
+# The duplicate refusal is the one place an unfinished earlier create can wedge
+# a task permanently, so it first offers this home's own pending-create record
+# a single chance to reclaim what that attempt left behind
+# (fm_backend_cmux_recover_orphaned_create). Every exit that leaves a workspace
+# this call may have created keeps that record; only a completed create or a
+# confirmed removal clears it.
 fm_backend_cmux_create_task() {  # <label> <cwd>
   local label=$1 cwd=$2 title dup out wsid sfid
   title=$(fm_backend_cmux_scoped_title "$label")
   dup=$(fm_backend_cmux_workspace_id_for_label "$title")
   if [ -n "$dup" ]; then
-    echo "error: cmux workspace '$title' already exists" >&2
-    return 1
+    fm_backend_cmux_recover_orphaned_create "$label" "$title" || {
+      echo "error: cmux workspace '$title' already exists" >&2
+      return 1
+    }
   fi
+  fm_backend_cmux_record_pending_create "$label" "$title" || return 1
   out=$(fm_backend_cmux_cli new-workspace --name "$title" --cwd "$cwd" --focus false --id-format uuids 2>&1) || {
     echo "error: cmux new-workspace failed for '$title': $out" >&2
     return 1
   }
   wsid=$(fm_backend_cmux_workspace_id_unique_for_label "$title") || {
-    echo "error: could not establish a unique cmux workspace id for '$title' after creation; preserving the workspace because ownership is ambiguous" >&2
+    echo "error: could not establish a unique cmux workspace id for '$title' after creation; preserving the workspace because ownership is ambiguous, and keeping this home's pending-create record so the next attempt can reclaim it" >&2
     return 1
   }
   sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
   if [ -z "$sfid" ]; then
     if fm_backend_cmux_cleanup_created_workspace "$wsid" "$title"; then
+      fm_backend_cmux_clear_pending_create "$label"
       echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid); removed the partial workspace" >&2
     fi
     return 1
   fi
+  fm_backend_cmux_clear_pending_create "$label"
   printf '%s %s' "$wsid" "$sfid"
 }
 

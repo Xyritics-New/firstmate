@@ -81,7 +81,12 @@ cmux_surface_id=<surface-uuid>
 The UUID pair is the active endpoint authority within one app run.
 Workspace UUIDs are not stable across an app relaunch, so recovery searches by the scoped title and then resolves the current surface id.
 
+`new-workspace` returns no id, so the create path writes `state/.cmux-pending-create.<fm-id>` naming the scoped title before it runs, and clears that record only on a completed create or a confirmed removal.
+The record is what attributes a workspace to this home when a create fails before the id can be resolved at all, which is the case `workspace list` produces when it serves a snapshot taken before the new workspace was published.
+
 If workspace creation succeeds but the default surface cannot be resolved, the create path re-reads cmux and removes that partial workspace only when its scoped title and id are unique and no task metadata in this home binds it.
+The next create attempt for the same task offers its own pending-create record one chance to reclaim whatever the previous attempt left behind, under those same proofs, before the duplicate check refuses; with no matching record the existing workspace belongs to a task and is left alone.
+Removal is confirmed by re-reading the workspace list, so the documented `close-workspace` no-op on the last workspace in a window is reported as a preserved workspace rather than a removal.
 Ambiguous workspaces and workspaces with an existing task binding are preserved with an explicit refusal rather than guessed at or removed.
 
 ## Current operation and safety
