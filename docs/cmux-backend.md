@@ -81,6 +81,9 @@ cmux_surface_id=<surface-uuid>
 The UUID pair is the active endpoint authority within one app run.
 Workspace UUIDs are not stable across an app relaunch, so recovery searches by the scoped title and then resolves the current surface id.
 
+If workspace creation succeeds but the default surface cannot be resolved, the create path re-reads cmux and removes that partial workspace only when its scoped title and id are unique and no task metadata in this home binds it.
+Ambiguous workspaces and workspaces with an existing task binding are preserved with an explicit refusal rather than guessed at or removed.
+
 ## Current operation and safety
 
 A genuinely fresh surface returns an internal error from `read-screen` until something has been written.

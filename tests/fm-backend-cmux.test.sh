@@ -496,6 +496,73 @@ test_create_task_creates_and_parses_ids() {
   pass "fm_backend_cmux_create_task: creates a workspace and parses workspace_id/surface_id from list responses"
 }
 
+test_create_task_cleans_partial_workspace() {
+  local dir fb out status title wsid
+  dir="$TMP_ROOT/create-partial-cleanup"; mkdir -p "$dir/responses" "$dir/home/state"
+  title=$(cmux_expected_scoped_title fm-partial)
+  wsid="dddddddd-3333-3333-3333-333333333333"
+  # 1: duplicate check -> no match
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  # 2: new-workspace succeeds but emits no response
+  # 3: the just-created workspace resolves uniquely
+  cmux_workspace_list_response "$dir" 3 "$wsid" "$title"
+  # 4: force the post-create surface lookup to fail
+  cmux_panes_empty_response "$dir" 4
+  # 5: cleanup re-check still proves the exact workspace is unique
+  cmux_workspace_list_response "$dir" 5 "$wsid" "$title"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-partial /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should fail when the created workspace has no resolvable surface"
+  assert_contains "$out" "removed the partial workspace" "create_task did not report cleanup of its own partial workspace"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f'"$wsid" \
+    "create_task did not close the uniquely identified partial workspace"
+  pass "fm_backend_cmux_create_task: cleans its own partial workspace after a post-create failure"
+}
+
+test_create_task_refuses_cleanup_for_bound_workspace() {
+  local dir fb out status title wsid
+  dir="$TMP_ROOT/create-bound-refusal"; mkdir -p "$dir/responses" "$dir/home/state"
+  title=$(cmux_expected_scoped_title fm-bound)
+  wsid="eeeeeeee-4444-4444-4444-444444444444"
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  cmux_workspace_list_response "$dir" 3 "$wsid" "$title"
+  cmux_panes_empty_response "$dir" 4
+  cmux_workspace_list_response "$dir" 5 "$wsid" "$title"
+  printf 'backend=cmux\ncmux_workspace_id=%s\n' "$wsid" > "$dir/home/state/live.meta"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-bound /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should fail when cleanup finds a bound workspace"
+  assert_contains "$out" "bound to a task in this home" "cleanup refusal did not explain the live-task binding"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
+    "cleanup closed a workspace bound to a live task"
+  pass "fm_backend_cmux_create_task: refuses cleanup when this home already binds the workspace"
+}
+
+test_create_task_refuses_ambiguous_workspace_ownership() {
+  local dir fb out status title wsid other
+  dir="$TMP_ROOT/create-ambiguous"; mkdir -p "$dir/responses" "$dir/home/state"
+  title=$(cmux_expected_scoped_title fm-ambiguous)
+  wsid="ffffffff-5555-5555-5555-555555555555"
+  other="99999999-6666-6666-6666-666666666666"
+  printf '{"workspaces":[]}' > "$dir/responses/1.out"
+  # A same-title second workspace models a concurrent/other-home ownership
+  # collision. The create path must preserve both rather than guess.
+  cmux_workspace_list_response "$dir" 3 "$wsid" "$title" "$other" "$title"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HOME="$dir/home" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-ambiguous /tmp/proj' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should refuse an ambiguous post-create workspace match"
+  assert_contains "$out" "ownership is ambiguous" "ambiguous workspace refusal did not explain the safety boundary"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-workspace' \
+    "cleanup touched a workspace when ownership was ambiguous"
+  pass "fm_backend_cmux_create_task: refuses to clean up an ambiguous same-title workspace"
+}
+
 # --- target_ready / capture ---------------------------------------------------
 
 test_target_ready_fails_when_target_absent() {
@@ -1130,6 +1197,9 @@ test_ensure_running_fails_fast_on_denied_without_launching
 test_ensure_running_fails_fast_on_unauth_without_launching
 test_create_task_refuses_duplicate_label
 test_create_task_creates_and_parses_ids
+test_create_task_cleans_partial_workspace
+test_create_task_refuses_cleanup_for_bound_workspace
+test_create_task_refuses_ambiguous_workspace_ownership
 test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch

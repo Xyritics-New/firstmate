@@ -335,10 +335,84 @@ fm_backend_cmux_workspace_id_for_label() {  # <label>
     | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
 }
 
+# fm_backend_cmux_workspace_id_unique_for_label: echo the sole live workspace
+# id whose title equals <label>, or fail closed when cmux cannot be inspected or
+# the title is absent/ambiguous. A unique post-create match is the ownership
+# proof used before cleaning up a partial create; a first-match lookup is not
+# sufficient because another home can race a title-only lookup.
+fm_backend_cmux_workspace_id_unique_for_label() {  # <label>
+  local label=$1 ids count
+  ids=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
+    | jq -er --arg want "$label" '
+      (.workspaces // null) as $workspaces
+      | select(($workspaces | type) == "array")
+      | [$workspaces[]? | select(.title == $want and (.id | type) == "string") | .id]
+      | .[]
+    ' 2>/dev/null) || return 1
+  count=$(printf '%s\n' "$ids" | awk 'NF { count += 1 } END { print count + 0 }')
+  [ "$count" = 1 ] || return 1
+  printf '%s' "$ids"
+}
+
 fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
   local wsid=$1
   fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
     | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
+}
+
+# fm_backend_cmux_workspace_bound_in_home: conservatively report whether any
+# task metadata in this home names <workspace_id>. Temporary metadata files are
+# included because publication is the binding boundary, and an ambiguous or
+# interrupted publication must never turn into permission to close a workspace.
+fm_backend_cmux_workspace_bound_in_home() {  # <workspace_id>
+  local wsid=$1 meta
+  for meta in "$FM_HOME"/state/*.meta "$FM_HOME"/state/.*.meta.*; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    if awk -F= -v wsid="$wsid" '
+      ($1 == "cmux_workspace_id" && $2 == wsid) ||
+      ($1 == "window" && index($2, wsid ":") == 1) { found = 1 }
+      END { exit(found ? 0 : 1) }
+    ' "$meta" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# fm_backend_cmux_cleanup_created_workspace: close one workspace created by
+# this create attempt, but only after re-reading cmux and proving that its title
+# and id are each unique and that this home has not bound the workspace in any
+# task record. Any uncertainty refuses cleanup and leaves the workspace for
+# explicit recovery; the helper never searches or mutates another home.
+fm_backend_cmux_cleanup_created_workspace() {  # <workspace_id> <title>
+  local wsid=$1 title=$2 counts title_count id_count
+  counts=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
+    | jq -er --arg wsid "$wsid" --arg title "$title" '
+      (.workspaces // null) as $workspaces
+      | select(($workspaces | type) == "array")
+      | [
+          ([$workspaces[]? | select(.title == $title)] | length),
+          ([$workspaces[]? | select(.id == $wsid and .title == $title)] | length)
+        ]
+      | @tsv
+    ' 2>/dev/null) || {
+    echo "error: cmux partial workspace cleanup refused for '$title' ($wsid): live workspace ownership could not be established; preserving it" >&2
+    return 1
+  }
+  read -r title_count id_count <<<"$counts"
+  if [ "$title_count" != 1 ] || [ "$id_count" != 1 ]; then
+    echo "error: cmux partial workspace cleanup refused for '$title' ($wsid): workspace title or id is ambiguous; preserving it" >&2
+    return 1
+  fi
+  if fm_backend_cmux_workspace_bound_in_home "$wsid"; then
+    echo "error: cmux partial workspace cleanup refused for '$title' ($wsid): it is bound to a task in this home; preserving it" >&2
+    return 1
+  fi
+  fm_backend_cmux_cli close-workspace --workspace "$wsid" >/dev/null 2>&1 || {
+    echo "error: cmux partial workspace cleanup failed for '$title' ($wsid); preserving it" >&2
+    return 1
+  }
+  return 0
 }
 
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
@@ -362,10 +436,17 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     echo "error: cmux new-workspace failed for '$title': $out" >&2
     return 1
   }
-  wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
-  [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation" >&2; return 1; }
+  wsid=$(fm_backend_cmux_workspace_id_unique_for_label "$title") || {
+    echo "error: could not establish a unique cmux workspace id for '$title' after creation; preserving the workspace because ownership is ambiguous" >&2
+    return 1
+  }
   sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
-  [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
+  if [ -z "$sfid" ]; then
+    if fm_backend_cmux_cleanup_created_workspace "$wsid" "$title"; then
+      echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid); removed the partial workspace" >&2
+    fi
+    return 1
+  fi
   printf '%s %s' "$wsid" "$sfid"
 }
 
